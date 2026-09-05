@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use kairos_primitives::decimal::Price;
 use kairos_primitives::market::Provider;
 use kairos_primitives::reference::{
-    AssetClass, ExchangeId, InstrumentId, InstrumentKind, MarketId, ReferenceStatus,
+    AssetClass, InstrumentId, InstrumentKind, MarketId, ReferenceStatus, VenueId,
 };
 use kairos_primitives::time::UnixNanos;
 use serde::{Deserialize, Serialize};
@@ -22,7 +22,7 @@ pub struct ResolvedMarket {
     pub scope: ObservationScope,
     pub instrument_id: InstrumentId,
     pub instrument_kind: InstrumentKind,
-    pub exchange_id: Option<ExchangeId>,
+    pub execution_venue_id: Option<VenueId>,
     #[serde(default)]
     pub asset_type: Option<AssetClass>,
     #[serde(default)]
@@ -50,7 +50,7 @@ impl ResolvedMarket {
         market_id: MarketId,
         instrument_id: InstrumentId,
         instrument_kind: InstrumentKind,
-        exchange_id: ExchangeId,
+        execution_venue_id: VenueId,
         route: ProviderRouteBinding,
     ) -> Result<Self, ResolvedMarketError> {
         if instrument_kind == InstrumentKind::Unknown {
@@ -66,7 +66,7 @@ impl ResolvedMarket {
             scope: ObservationScope::from(market_id),
             instrument_id,
             instrument_kind,
-            exchange_id: Some(exchange_id),
+            execution_venue_id: Some(execution_venue_id),
             asset_type: None,
             underlying_instrument_id: None,
             expiry_unix_nanos: None,
@@ -86,7 +86,7 @@ impl ResolvedMarket {
         market_id: impl Into<String>,
         instrument_id: impl Into<String>,
         instrument_kind: InstrumentKind,
-        exchange_id: impl Into<String>,
+        execution_venue_id: impl Into<String>,
         provider: impl Into<String>,
     ) -> Result<Self, ResolvedMarketError> {
         let provider = Provider::new(provider.into()).map_err(|source| {
@@ -99,7 +99,7 @@ impl ResolvedMarket {
             market_id,
             instrument_id,
             instrument_kind,
-            exchange_id,
+            execution_venue_id,
             BTreeSet::from([provider]),
             BTreeMap::new(),
         )
@@ -110,7 +110,7 @@ impl ResolvedMarket {
         market_id: impl Into<String>,
         instrument_id: impl Into<String>,
         instrument_kind: InstrumentKind,
-        exchange_id: impl Into<String>,
+        execution_venue_id: impl Into<String>,
         route: ProviderRouteBinding,
     ) -> Result<Self, ResolvedMarketError> {
         let providers = BTreeSet::from([route.provider.clone()]);
@@ -119,7 +119,7 @@ impl ResolvedMarket {
             market_id,
             instrument_id,
             instrument_kind,
-            exchange_id,
+            execution_venue_id,
             providers,
             runtime_routes,
         )
@@ -129,7 +129,7 @@ impl ResolvedMarket {
         market_id: impl Into<String>,
         instrument_id: impl Into<String>,
         instrument_kind: InstrumentKind,
-        exchange_id: impl Into<String>,
+        execution_venue_id: impl Into<String>,
         providers: BTreeSet<Provider>,
         runtime_routes: BTreeMap<Provider, ProviderRouteBinding>,
     ) -> Result<Self, ResolvedMarketError> {
@@ -162,9 +162,9 @@ impl ResolvedMarket {
                 }
             })?,
             instrument_kind,
-            exchange_id: Some(ExchangeId::new(exchange_id).map_err(|source| {
+            execution_venue_id: Some(VenueId::new(execution_venue_id).map_err(|source| {
                 ResolvedMarketError::InvalidSemantic {
-                    field: "exchange_id",
+                    field: "execution_venue_id",
                     source,
                 }
             })?),
@@ -206,7 +206,7 @@ impl ResolvedMarket {
             scope: ObservationScope::consolidated(instrument_id.to_string(), network_id)?,
             instrument_id,
             instrument_kind,
-            exchange_id: None,
+            execution_venue_id: None,
             asset_type: None,
             underlying_instrument_id: None,
             expiry_unix_nanos: None,
@@ -236,7 +236,7 @@ impl ResolvedMarket {
             scope: ObservationScope::consolidated(instrument_id.to_string(), network_id)?,
             instrument_id,
             instrument_kind,
-            exchange_id: None,
+            execution_venue_id: None,
             asset_type: None,
             underlying_instrument_id: None,
             expiry_unix_nanos: None,

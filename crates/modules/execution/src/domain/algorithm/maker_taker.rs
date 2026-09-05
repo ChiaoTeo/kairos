@@ -1,9 +1,9 @@
 use kairos_primitives::decimal::Quantity;
 
 use super::{
-    AlgorithmActionKind, AlgorithmDecision, AlgorithmExecutionStyle, AlgorithmInput,
-    AlgorithmLegLifecycle, AlgorithmRun, AlgorithmRunStatus, ExecutionAlgorithmSpec,
-    NormalizedExposureLedger,
+    AlgorithmActionKind, AlgorithmDecision, AlgorithmError, AlgorithmExecutionStyle,
+    AlgorithmInput, AlgorithmInvariant, AlgorithmLegLifecycle, AlgorithmRun, AlgorithmRunStatus,
+    ExecutionAlgorithmSpec, NormalizedExposureLedger,
 };
 
 impl AlgorithmRun {
@@ -14,21 +14,27 @@ impl AlgorithmRun {
         unwind_filled_quantity: Quantity,
         unwind_committed_quantity: Quantity,
         exposure_observed_at: Option<kairos_primitives::time::UnixNanos>,
-    ) -> Result<(), String> {
+    ) -> Result<(), AlgorithmError> {
         let ExecutionAlgorithmSpec::MakerTakerHedge(spec) = self.spec.clone() else {
-            return Err("exposure synchronization requires a maker-taker run".into());
+            return Err(AlgorithmError::SpecMismatch {
+                expected: "maker-taker",
+            });
         };
         let leader = self
             .legs
             .iter()
             .find(|leg| leg.leg_id == spec.leader_leg_id)
             .cloned()
-            .ok_or_else(|| "maker-taker leader leg is missing".to_string())?;
+            .ok_or_else(|| AlgorithmError::MissingLeg {
+                leg_id: spec.leader_leg_id.to_string(),
+            })?;
         let hedge_index = self
             .legs
             .iter()
             .position(|leg| leg.leg_id == spec.hedge_leg_id)
-            .ok_or_else(|| "maker-taker hedge leg is missing".to_string())?;
+            .ok_or_else(|| AlgorithmError::MissingLeg {
+                leg_id: spec.hedge_leg_id.to_string(),
+            })?;
         let hedge = self.legs[hedge_index].clone();
         let net_leader_filled =
             subtract_saturating(leader.filled_quantity, unwind_filled_quantity)?;
@@ -87,16 +93,18 @@ impl AlgorithmRun {
 pub fn decide_maker_taker_hedge(
     run: &AlgorithmRun,
     mut input: AlgorithmInput,
-) -> Result<AlgorithmDecision, String> {
+) -> Result<AlgorithmDecision, AlgorithmError> {
     let ExecutionAlgorithmSpec::MakerTakerHedge(spec) = &run.spec else {
-        return Err("maker-taker decision received a different algorithm spec".into());
+        return Err(AlgorithmError::SpecMismatch {
+            expected: "maker-taker",
+        });
     };
     run.validate()?;
     if run
         .last_decision_at
         .is_some_and(|current| input.business_time < current)
     {
-        return Err("algorithm business time cannot move backwards".into());
+        return Err(AlgorithmError::BusinessTimeRegression);
     }
     if matches!(
         run.status,
@@ -129,10 +137,9 @@ pub fn decide_maker_taker_hedge(
             }],
         });
     }
-    let exposure = run
-        .exposure
-        .as_ref()
-        .ok_or_else(|| "maker-taker exposure ledger is missing".to_string())?;
+    let exposure = run.exposure.as_ref().ok_or(AlgorithmError::invariant(
+        AlgorithmInvariant::MissingExposureLedger,
+    ))?;
     input
         .ready_children
         .sort_by(|left, right| left.order_id.cmp(&right.order_id));
@@ -141,7 +148,9 @@ pub fn decide_maker_taker_hedge(
         .legs
         .iter()
         .find(|leg| leg.leg_id == spec.hedge_leg_id)
-        .ok_or_else(|| "maker-taker hedge leg is missing".to_string())?;
+        .ok_or_else(|| AlgorithmError::MissingLeg {
+            leg_id: spec.hedge_leg_id.to_string(),
+        })?;
     let hedge_due = spec.hedge_due(exposure, input.business_time)?;
     if hedge.lifecycle == AlgorithmLegLifecycle::Failed
         && hedge_due
@@ -152,7 +161,9 @@ pub fn decide_maker_taker_hedge(
                 && candidate.execution_style == AlgorithmExecutionStyle::TakerImmediate
         }) {
             if candidate.quantity < exposure.unhedged_after_commitment {
-                return Err("ready fallback hedge cannot cover current exposure".into());
+                return Err(AlgorithmError::invariant(
+                    AlgorithmInvariant::ExposureNotCovered,
+                ));
             }
             return Ok(submit_decision(
                 run,
@@ -173,11 +184,13 @@ pub fn decide_maker_taker_hedge(
                 candidate.leg_id == spec.leader_leg_id
                     && candidate.execution_style == AlgorithmExecutionStyle::UnwindImmediate
             })
-            .ok_or_else(|| {
-                "failed taker hedge requires a ready fallback hedge or unwind child".to_string()
-            })?;
+            .ok_or(AlgorithmError::invariant(
+                AlgorithmInvariant::MissingReadyTwapChild,
+            ))?;
         if candidate.quantity < unwind_quantity {
-            return Err("ready unwind child cannot close current exposure".into());
+            return Err(AlgorithmError::invariant(
+                AlgorithmInvariant::ExposureNotCovered,
+            ));
         }
         return Ok(submit_decision(
             run,
@@ -198,9 +211,13 @@ pub fn decide_maker_taker_hedge(
                 candidate.leg_id == spec.hedge_leg_id
                     && candidate.execution_style == AlgorithmExecutionStyle::TakerImmediate
             })
-            .ok_or_else(|| "unhedged exposure requires a ready taker hedge child".to_string())?;
+            .ok_or(AlgorithmError::invariant(
+                AlgorithmInvariant::MissingReadyTwapChild,
+            ))?;
         if candidate.quantity < exposure.unhedged_after_commitment {
-            return Err("ready taker hedge child cannot cover current exposure".into());
+            return Err(AlgorithmError::invariant(
+                AlgorithmInvariant::ExposureNotCovered,
+            ));
         }
         return Ok(submit_decision(
             run,
@@ -217,7 +234,9 @@ pub fn decide_maker_taker_hedge(
         .legs
         .iter()
         .find(|leg| leg.leg_id == spec.leader_leg_id)
-        .ok_or_else(|| "maker-taker leader leg is missing".to_string())?;
+        .ok_or_else(|| AlgorithmError::MissingLeg {
+            leg_id: spec.leader_leg_id.to_string(),
+        })?;
     if leader.filled_quantity >= leader.target_quantity
         && !hedge_due
         && (exposure.unhedged_filled_quantity.is_zero() || spec.max_unhedged_duration.is_none())
@@ -250,7 +269,9 @@ pub fn decide_maker_taker_hedge(
         });
         if let Some(candidate) = candidate {
             if candidate.quantity.is_zero() || candidate.quantity > remaining {
-                return Err("ready maker child exceeds the leader's uncommitted quantity".into());
+                return Err(AlgorithmError::invariant(
+                    AlgorithmInvariant::ChildExceedsLegTarget,
+                ));
             }
             return Ok(submit_decision(
                 run,
@@ -271,11 +292,15 @@ pub fn decide_maker_taker_hedge(
     ))
 }
 
-fn subtract_saturating(left: Quantity, right: Quantity) -> Result<Quantity, String> {
+fn subtract_saturating(left: Quantity, right: Quantity) -> Result<Quantity, AlgorithmError> {
     if right >= left {
         Ok(Quantity::ZERO)
     } else {
-        left.checked_sub(right).map_err(|error| error.to_string())
+        left.checked_sub(right)
+            .map_err(|source| AlgorithmError::Arithmetic {
+                operation: "saturating exposure subtraction",
+                source,
+            })
     }
 }
 

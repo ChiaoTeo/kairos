@@ -28,6 +28,10 @@ fn main() {
     let provider = builder.create_string("fixture");
     let bid_price = Decimal64::new(12345, 2);
     let ask_price = Decimal64::new(12355, 2);
+    let bid_venue_id = builder.create_string("venue:bid");
+    let ask_venue_id = builder.create_string("venue:ask");
+    let bid_venue_code = builder.create_string("19");
+    let ask_venue_code = builder.create_string("11");
     let quote = fb::Quote::create(
         &mut builder,
         &fb::QuoteArgs {
@@ -36,6 +40,10 @@ fn main() {
             provider: Some(provider),
             bid_price: Some(&bid_price),
             ask_price: Some(&ask_price),
+            bid_venue_id: Some(bid_venue_id),
+            ask_venue_id: Some(ask_venue_id),
+            bid_venue_code: Some(bid_venue_code),
+            ask_venue_code: Some(ask_venue_code),
             source_observed_at_unix_nanos: 18,
             ..Default::default()
         },

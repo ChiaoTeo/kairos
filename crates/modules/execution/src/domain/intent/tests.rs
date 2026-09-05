@@ -21,17 +21,19 @@ mod tests {
         )
         .unwrap();
         let second = first.clone();
-        assert!(
-            ExecutionPlan::new(
-                "plan",
-                "intent",
-                IntentType::PairArbitrage,
-                vec![first, second],
-                CompletionPolicy::AllLegsSatisfied,
-                FailurePolicy::CancelRemaining,
-            )
-            .is_err()
+        let error = ExecutionPlan::new(
+            "plan",
+            "intent",
+            IntentType::PairArbitrage,
+            vec![first, second],
+            CompletionPolicy::AllLegsSatisfied,
+            FailurePolicy::CancelRemaining,
         );
+        assert!(matches!(
+            &error,
+            Err(IntentError::DuplicateLeg { leg_id }) if leg_id.as_str() == "leg"
+        ));
+        assert_eq!(error.unwrap_err().code(), "execution.intent.duplicate_leg");
     }
 
     #[test]
@@ -106,6 +108,27 @@ mod tests {
             chunks,
             vec![Quantity::new(5, 1).unwrap(), Quantity::new(5, 1).unwrap()]
         );
+    }
+
+    #[test]
+    fn split_quantity_exposes_a_stable_non_positive_category() {
+        let error = split_quantity(
+            Quantity::ZERO,
+            &SplitOrderPolicy {
+                max_child_quantity: None,
+                child_count: None,
+                min_child_quantity: None,
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            IntentError::SplitQuantityNotPositive {
+                total: Quantity::ZERO
+            }
+        ));
+        assert_eq!(error.code(), "execution.intent.split_quantity_not_positive");
     }
 
     #[test]

@@ -1,21 +1,24 @@
 use super::{
-    AlgorithmActionKind, AlgorithmDecision, AlgorithmExecutionStyle, AlgorithmInput,
-    AlgorithmLegLifecycle, AlgorithmRun, AlgorithmRunStatus, ExecutionAlgorithmSpec,
+    AlgorithmActionKind, AlgorithmDecision, AlgorithmError, AlgorithmExecutionStyle,
+    AlgorithmInput, AlgorithmInvariant, AlgorithmLegLifecycle, AlgorithmRun, AlgorithmRunStatus,
+    ExecutionAlgorithmSpec,
 };
 
 pub fn decide_immediate(
     run: &AlgorithmRun,
     mut input: AlgorithmInput,
-) -> Result<AlgorithmDecision, String> {
+) -> Result<AlgorithmDecision, AlgorithmError> {
     if run.spec != ExecutionAlgorithmSpec::Immediate {
-        return Err("immediate decision received a different algorithm spec".into());
+        return Err(AlgorithmError::SpecMismatch {
+            expected: "immediate",
+        });
     }
     run.validate()?;
     if run
         .last_decision_at
         .is_some_and(|current| input.business_time < current)
     {
-        return Err("algorithm business time cannot move backwards".into());
+        return Err(AlgorithmError::BusinessTimeRegression);
     }
     if matches!(
         run.status,
@@ -73,21 +76,29 @@ pub fn decide_immediate(
         .sort_by(|left, right| left.order_id.cmp(&right.order_id));
     let actions = if let Some(candidate) = input.ready_children.into_iter().next() {
         if candidate.quantity.is_zero() {
-            return Err("ready child quantity must be positive".into());
+            return Err(AlgorithmError::invariant(
+                AlgorithmInvariant::ReadyChildQuantityNotPositive,
+            ));
         }
         let leg = run
             .legs
             .iter()
             .find(|leg| leg.leg_id == candidate.leg_id)
-            .ok_or_else(|| "ready child references an unknown algorithm leg".to_string())?;
+            .ok_or_else(|| AlgorithmError::MissingLeg {
+                leg_id: candidate.leg_id.to_string(),
+            })?;
         if !matches!(
             leg.lifecycle,
             AlgorithmLegLifecycle::Ready | AlgorithmLegLifecycle::Active
         ) {
-            return Err("ready child references an inactive algorithm leg".into());
+            return Err(AlgorithmError::invariant(
+                AlgorithmInvariant::InactiveReadyChildLeg,
+            ));
         }
         if candidate.quantity > leg.remaining_uncommitted()? {
-            return Err("ready child exceeds the leg's uncommitted quantity".into());
+            return Err(AlgorithmError::invariant(
+                AlgorithmInvariant::ChildExceedsLegTarget,
+            ));
         }
         vec![AlgorithmActionKind::SubmitChild {
             order_id: candidate.order_id,

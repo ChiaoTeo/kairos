@@ -15,15 +15,22 @@ pub mod event;
 use std::path::PathBuf;
 
 pub use catalog::{
-    AccountReferenceSnapshot, Asset, AssetCatalogQuery, Exchange, ExchangeCatalogQuery,
-    ExecutionReferenceSnapshot, Instrument, InstrumentAvailabilityQuery, InstrumentCatalogQuery,
-    InstrumentSearchQuery, LifecycleEntry, Listing, ListingCatalogQuery, Market,
-    MarketCatalogQuery, MarketReferenceSnapshot, MarketSearchQuery, ProviderHealthState,
-    REFERENCE_SQLITE_SCHEMA_VERSION, ReferenceCatalog, ReferenceCatalogSnapshot,
-    ReferenceCatalogStats, ReferenceCatalogStatus, ReferenceInstrumentAvailability,
-    ReferenceIntegrityStats, ReferenceLifecycleEvent, ReferenceMarketCatalogPage,
-    ReferenceMarketPage, ReferenceOptionCoverage, ReferencePage, ReferenceReadSession,
-    ReferenceWatermark,
+    Asset, AssetCatalogQuery, CoverageCompleteness, CoverageState, Exchange, ExchangeCatalogQuery,
+    Instrument, InstrumentAvailabilityQuery, InstrumentCatalogQuery, InstrumentSearchQuery,
+    InstrumentSearchResponse, LifecycleEntry, Listing, ListingCatalogQuery, ListingRole,
+    ListingSearchResponse, Market, MarketCatalogQuery, MarketResolution, MarketResolutionQuery,
+    MarketResolutionResponse, MarketSearchQuery, MarketSearchResponse, ParticipantSymbolResolution,
+    ParticipantSymbolResolutionQuery, ParticipantSymbolResolutionResponse,
+    ProviderCatalogMembership, ProviderCatalogMembershipQuery, ProviderHealthState,
+    REFERENCE_SQLITE_SCHEMA_VERSION, ReferenceCatalog, ReferenceCatalogStats,
+    ReferenceCatalogStatus, ReferenceCoverage, ReferenceCoverageEvidence, ReferenceCoverageScope,
+    ReferenceFactKind, ReferenceInstrumentAvailability, ReferenceIntegrityStats,
+    ReferenceKnowledgeConclusion, ReferenceLifecycleEvent, ReferenceMarketCatalogPage,
+    ReferenceMarketPage, ReferenceOptionCoverage, ReferencePage, ReferenceQueryEvidence,
+    ReferenceReadSession, ReferenceWatermark, TradingRules, Venue, VenueIdentifierKind,
+    VenueIdentifierMapping, VenueIdentifierResolutionQuery, VenueIdentifierResolutionResponse,
+    VenueKind, VenueListing, VenueListingSearchQuery, VenueMarket, VenueMarketSearchQuery,
+    VenueRole, VenueSearchQuery, VenueSearchResponse,
 };
 pub use control::{
     BinanceReferenceSource, HyperliquidReferenceSource, MassiveReferenceSource, OkxReferenceSource,
@@ -65,7 +72,6 @@ pub const DEFAULT_AERON_CHANNEL: &str = kairos_transport::DEFAULT_CHANNEL;
 pub struct ReferenceClient {
     inner: kairos_protocol::ContractClient,
     database: PathBuf,
-    actor_id: ActorId,
 }
 
 #[derive(Clone)]
@@ -80,7 +86,6 @@ impl ReferenceClient {
         Self {
             inner: connection.contract,
             database: connection.database,
-            actor_id: connection.actor_id,
         }
     }
 
@@ -109,6 +114,12 @@ impl ReferenceClient {
         ReferenceCatalog::open(&self.database)
     }
 
+    /// Open one short-lived, generation-pinned read transaction for an
+    /// atomic bounded business query.
+    pub fn read_session(&self) -> ContractResult<ReferenceReadSession> {
+        self.catalog()?.read_session()
+    }
+
     pub fn require_market(
         &self,
         market_id: &kairos_primitives::reference::MarketId,
@@ -127,37 +138,4 @@ impl ReferenceClient {
     ) -> ContractResult<ReferenceMarketCatalogPage> {
         self.catalog()?.market_catalog(query)
     }
-
-    pub fn market_snapshot(&self) -> ContractResult<MarketReferenceSnapshot> {
-        self.catalog()?.market_snapshot(self.actor_id.as_str())
-    }
-
-    pub fn execution_snapshot(&self) -> ContractResult<ExecutionReferenceSnapshot> {
-        self.catalog()?.execution_snapshot(self.actor_id.as_str())
-    }
-
-    pub fn account_snapshot(&self) -> ContractResult<AccountReferenceSnapshot> {
-        self.catalog()?.account_snapshot(self.actor_id.as_str())
-    }
-}
-
-pub fn read_market_snapshot(
-    database: impl AsRef<std::path::Path>,
-    actor_id: &ActorId,
-) -> ContractResult<MarketReferenceSnapshot> {
-    ReferenceCatalog::open(database)?.market_snapshot(actor_id.as_str())
-}
-
-pub fn read_execution_snapshot(
-    database: impl AsRef<std::path::Path>,
-    actor_id: &ActorId,
-) -> ContractResult<ExecutionReferenceSnapshot> {
-    ReferenceCatalog::open(database)?.execution_snapshot(actor_id.as_str())
-}
-
-pub fn read_account_snapshot(
-    database: impl AsRef<std::path::Path>,
-    actor_id: &ActorId,
-) -> ContractResult<AccountReferenceSnapshot> {
-    ReferenceCatalog::open(database)?.account_snapshot(actor_id.as_str())
 }

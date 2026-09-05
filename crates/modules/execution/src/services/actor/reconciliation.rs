@@ -15,11 +15,13 @@ impl ExecutionActor {
         &mut self,
         order_id: &str,
         cursor: crate::domain::OrderFactCursor,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, OrderError> {
         let order = self
             .orders
             .get_mut(order_id)
-            .ok_or_else(|| "cursor references unknown order".to_string())?;
+            .ok_or_else(|| OrderError::UnknownOrder {
+                order_id: order_id.to_owned(),
+            })?;
         if order.last_order_fact_cursor.as_ref() == Some(&cursor) {
             return Ok(false);
         }
@@ -49,14 +51,21 @@ impl ExecutionActor {
         occurred_at: u64,
         reason: String,
         source_cursor: Option<crate::domain::OrderFactCursor>,
-    ) -> Result<(ExecutionOrder, ExecutionEvent), String> {
-        let mut order = self
-            .order(local_order_id)
-            .cloned()
-            .ok_or_else(|| "reconciled order disappeared".to_string())?;
-        order.remote_order_id = Some(crate::domain::RemoteOrderId::new(
-            remote_order_id.to_owned(),
-        )?);
+    ) -> Result<(ExecutionOrder, ExecutionEvent), OrderError> {
+        let mut order =
+            self.order(local_order_id)
+                .cloned()
+                .ok_or_else(|| OrderError::UnknownOrder {
+                    order_id: local_order_id.to_owned(),
+                })?;
+        order.remote_order_id = Some(
+            crate::domain::RemoteOrderId::new(remote_order_id.to_owned()).map_err(|source| {
+                OrderError::InvalidSemantic {
+                    field: "remote_order_id",
+                    source,
+                }
+            })?,
+        );
         order.status = status;
         order.reconciliation_cause = match status {
             ExecutionOrderStatus::Unknown => {
@@ -89,19 +98,29 @@ impl ExecutionActor {
         applied_at: u64,
         reason: String,
         source_cursor: Option<crate::domain::OrderFactCursor>,
-    ) -> Result<(ExecutionOrder, ExecutionEvent), String> {
-        let mut order = self
-            .order(local_order_id)
-            .cloned()
-            .ok_or_else(|| "conflicting order disappeared".to_string())?;
+    ) -> Result<(ExecutionOrder, ExecutionEvent), OrderError> {
+        let mut order =
+            self.order(local_order_id)
+                .cloned()
+                .ok_or_else(|| OrderError::UnknownOrder {
+                    order_id: local_order_id.to_owned(),
+                })?;
         if let Some(remote_order_id) = remote_order_id {
-            let remote_order_id = crate::domain::RemoteOrderId::new(remote_order_id.to_owned())?;
+            let remote_order_id = crate::domain::RemoteOrderId::new(remote_order_id.to_owned())
+                .map_err(|source| OrderError::InvalidSemantic {
+                    field: "remote_order_id",
+                    source,
+                })?;
             if order
                 .remote_order_id
                 .as_ref()
                 .is_some_and(|current| current != &remote_order_id)
             {
-                return Err("conflicting fact has a different remote order identity".into());
+                return Err(OrderError::RemoteIdentityConflict {
+                    order_id: order.order_id,
+                    expected: order.remote_order_id,
+                    actual: remote_order_id,
+                });
             }
             order.remote_order_id = Some(remote_order_id);
         }
@@ -124,11 +143,13 @@ impl ExecutionActor {
         resolution: UnknownRemoteOrderResolution,
         reason: String,
         now: u64,
-    ) -> Result<(), String> {
+    ) -> Result<(), OrderError> {
         let order = self
             .unknown_remote_orders
             .get_mut(remote_order_id)
-            .ok_or_else(|| format!("unknown remote order does not exist: {remote_order_id}"))?;
+            .ok_or_else(|| OrderError::UnknownRemoteOrder {
+                remote_order_id: remote_order_id.to_owned(),
+            })?;
         order.resolution = resolution;
         order.reason = reason;
         order.last_seen_at_unix_nanos = now.into();
@@ -139,12 +160,14 @@ impl ExecutionActor {
         &mut self,
         remote_order_id: &str,
         local_order_id: &str,
-    ) -> Result<(UnknownRemoteOrder, ExecutionOrder, ExecutionEvent), String> {
+    ) -> Result<(UnknownRemoteOrder, ExecutionOrder, ExecutionEvent), OrderError> {
         let unknown = self
             .unknown_remote_orders
             .get(remote_order_id)
             .cloned()
-            .ok_or_else(|| format!("unknown remote order does not exist: {remote_order_id}"))?;
+            .ok_or_else(|| OrderError::UnknownRemoteOrder {
+                remote_order_id: remote_order_id.to_owned(),
+            })?;
         let (order, event) = self.reconcile_order(
             local_order_id,
             remote_order_id,
@@ -182,10 +205,7 @@ impl ExecutionActor {
         event
     }
 
-    pub(crate) fn record_unknown_remote_order(
-        &mut self,
-        event: &RemoteOrderUpdate,
-    ) -> Result<(), String> {
+    pub(crate) fn record_unknown_remote_order(&mut self, event: &RemoteOrderUpdate) {
         if self
             .unknown_remote_orders
             .get(event.remote_order_id.as_str())
@@ -193,7 +213,7 @@ impl ExecutionActor {
             .zip(event.source_cursor.as_ref())
             .is_some_and(|(previous, incoming)| incoming.regresses(previous))
         {
-            return Ok(());
+            return;
         }
         let remote_order_id = event.remote_order_id.clone();
         let entry = self
@@ -224,6 +244,5 @@ impl ExecutionActor {
         entry.source_cursor = event.source_cursor.clone();
         entry.last_seen_at_unix_nanos = event.occurred_at_unix_nanos;
         entry.reason = event.reason.clone();
-        Ok(())
     }
 }

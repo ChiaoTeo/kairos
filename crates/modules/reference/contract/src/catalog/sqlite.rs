@@ -8,9 +8,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use kairos_primitives::integration::ParticipantSymbol;
+use kairos_primitives::market::Provider;
 use kairos_primitives::reference::{
-    AssetClass, AssetId, ExchangeId, InstrumentId, InstrumentKind, ListingId, MarketId,
-    ReferenceSourceId, ReferenceStatus, Symbol,
+    AssetClass, AssetId, ExchangeId, InstrumentId, InstrumentKind, ListingId, MarketId, Mic,
+    ReferenceCoverageId, ReferenceSourceId, ReferenceStatus, Symbol, VenueId,
 };
 use kairos_primitives::time::{Generation, Sequence, UnixNanos};
 use rusqlite::types::Value;
@@ -18,18 +20,129 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params, params_from_ite
 
 use crate::catalog::{Asset, Exchange, Instrument, Listing};
 use crate::{
-    AccountReferenceSnapshot, ContractError, ContractResult, ExecutionReferenceSnapshot, Market,
-    MarketReferenceSnapshot, ReferenceCatalogSnapshot, ReferenceInstrumentAvailability,
+    ContractError, ContractResult, CoverageCompleteness, CoverageState, Market,
+    ProviderCatalogMembership, ReferenceCoverage, ReferenceCoverageScope, ReferenceFactKind,
+    ReferenceInstrumentAvailability, ReferenceKnowledgeConclusion, Venue, VenueIdentifierKind,
+    VenueIdentifierMapping, VenueKind, VenueListing, VenueMarket, VenueRole,
 };
 
-pub const REFERENCE_SQLITE_SCHEMA_VERSION: u32 = 6;
+pub const REFERENCE_SQLITE_SCHEMA_VERSION: u32 = 10;
 const MAX_PAGE_SIZE: usize = 10_000;
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ReferenceWatermark {
     pub generation: Generation,
     pub event_sequence: Sequence,
     pub committed_at_unix_nanos: UnixNanos,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ReferenceCoverageEvidence {
+    pub coverage_id: ReferenceCoverageId,
+    pub source_id: ReferenceSourceId,
+    pub scope: ReferenceCoverageScope,
+    pub completeness: CoverageCompleteness,
+    pub state: CoverageState,
+    pub last_success_unix_nanos: Option<UnixNanos>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ReferenceQueryEvidence {
+    pub watermark: ReferenceWatermark,
+    pub conclusion: ReferenceKnowledgeConclusion,
+    pub coverages: Vec<ReferenceCoverageEvidence>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct InstrumentSearchResponse {
+    pub instruments: Vec<Instrument>,
+    pub evidence: ReferenceQueryEvidence,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct MarketSearchResponse {
+    pub markets: Vec<VenueMarket>,
+    pub instruments: BTreeMap<InstrumentId, Instrument>,
+    pub evidence: ReferenceQueryEvidence,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ListingSearchResponse {
+    pub listings: Vec<VenueListing>,
+    pub evidence: ReferenceQueryEvidence,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct VenueSearchResponse {
+    pub venues: Vec<Venue>,
+    pub evidence: ReferenceQueryEvidence,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VenueIdentifierResolutionQuery {
+    pub provider: Provider,
+    pub provider_product: String,
+    pub identifier_kind: VenueIdentifierKind,
+    pub identifier: String,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct VenueIdentifierResolutionResponse {
+    pub mapping: Option<VenueIdentifierMapping>,
+    pub venue: Option<Venue>,
+    pub watermark: ReferenceWatermark,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct MarketResolutionQuery {
+    pub market_id: Option<MarketId>,
+    pub instrument_id: Option<InstrumentId>,
+    pub execution_venue_id: Option<VenueId>,
+    pub active_only: bool,
+    pub coverage_scope: Option<ReferenceCoverageScope>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MarketResolution {
+    pub instrument: Instrument,
+    pub market: VenueMarket,
+    pub venue: Venue,
+    pub origin_listing: Option<VenueListing>,
+    pub provider_catalog_memberships: Vec<ProviderCatalogMembership>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct MarketResolutionResponse {
+    pub resolution: Option<MarketResolution>,
+    pub candidate_count: u64,
+    pub evidence: ReferenceQueryEvidence,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ParticipantSymbolResolutionQuery {
+    pub participant: Provider,
+    pub product: String,
+    pub source_symbol: ParticipantSymbol,
+    pub instrument_kind: Option<InstrumentKind>,
+    pub coverage_scope: Option<ReferenceCoverageScope>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ParticipantSymbolResolution {
+    pub instrument: Instrument,
+    pub listing: Option<VenueListing>,
+    pub market: Option<VenueMarket>,
+    pub membership: ProviderCatalogMembership,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ParticipantSymbolResolutionResponse {
+    pub matches: Vec<ParticipantSymbolResolution>,
+    pub evidence: ReferenceQueryEvidence,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize)]
@@ -124,6 +237,9 @@ pub struct InstrumentSearchQuery {
     pub option_right: Option<String>,
     pub status: Option<ReferenceStatus>,
     pub active_only: bool,
+    /// Exact knowledge boundary required before an empty result may be
+    /// interpreted as authoritative absence.
+    pub coverage_scope: Option<ReferenceCoverageScope>,
     pub page: ReferencePage,
 }
 
@@ -145,6 +261,59 @@ pub struct ListingCatalogQuery {
     pub instrument_id: Option<InstrumentId>,
     pub exchange_id: Option<ExchangeId>,
     pub exchange_symbol: Option<Symbol>,
+    pub status: Option<ReferenceStatus>,
+    pub active_only: bool,
+    pub page: ReferencePage,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct VenueSearchQuery {
+    pub venue_ids: Option<Vec<VenueId>>,
+    pub search: Option<String>,
+    pub mic: Option<Mic>,
+    pub venue_kind: Option<VenueKind>,
+    pub role: Option<VenueRole>,
+    pub status: Option<ReferenceStatus>,
+    pub active_only: bool,
+    pub coverage_scope: Option<ReferenceCoverageScope>,
+    pub page: ReferencePage,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct VenueListingSearchQuery {
+    pub listing_ids: Option<Vec<ListingId>>,
+    pub search: Option<String>,
+    pub instrument_id: Option<InstrumentId>,
+    pub listing_venue_id: Option<VenueId>,
+    pub listing_symbol: Option<Symbol>,
+    pub status: Option<ReferenceStatus>,
+    pub active_only: bool,
+    pub coverage_scope: Option<ReferenceCoverageScope>,
+    pub page: ReferencePage,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct VenueMarketSearchQuery {
+    pub market_ids: Option<Vec<MarketId>>,
+    pub search: Option<String>,
+    pub instrument_id: Option<InstrumentId>,
+    pub underlying_instrument_id: Option<InstrumentId>,
+    pub execution_venue_id: Option<VenueId>,
+    pub origin_listing_id: Option<ListingId>,
+    pub venue_symbol: Option<Symbol>,
+    pub instrument_kind: Option<InstrumentKind>,
+    pub status: Option<ReferenceStatus>,
+    pub active_only: bool,
+    pub coverage_scope: Option<ReferenceCoverageScope>,
+    pub page: ReferencePage,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ProviderCatalogMembershipQuery {
+    pub source_ids: Option<Vec<ReferenceSourceId>>,
+    pub instrument_ids: Option<Vec<InstrumentId>>,
+    pub provider_symbol: Option<String>,
+    pub provider_product: Option<String>,
     pub status: Option<ReferenceStatus>,
     pub active_only: bool,
     pub page: ReferencePage,
@@ -252,50 +421,6 @@ impl ReferenceCatalog {
 
     pub fn read_session(&self) -> ContractResult<ReferenceReadSession> {
         ReferenceReadSession::open(&self.path)
-    }
-
-    pub(crate) fn market_snapshot(
-        &self,
-        actor_id: &str,
-    ) -> ContractResult<MarketReferenceSnapshot> {
-        Ok(self.consumer_snapshot(actor_id)?.for_market())
-    }
-
-    pub(crate) fn execution_snapshot(
-        &self,
-        actor_id: &str,
-    ) -> ContractResult<ExecutionReferenceSnapshot> {
-        Ok(self.consumer_snapshot(actor_id)?.for_execution())
-    }
-
-    pub(crate) fn account_snapshot(
-        &self,
-        actor_id: &str,
-    ) -> ContractResult<AccountReferenceSnapshot> {
-        Ok(self.consumer_snapshot(actor_id)?.for_account())
-    }
-
-    fn consumer_snapshot(&self, actor_id: &str) -> ContractResult<ReferenceCatalogSnapshot> {
-        let mut connection = self.connection()?;
-        let transaction = connection.transaction().map_err(transport)?;
-        let watermark = read_watermark(&transaction)?;
-        let snapshot = ReferenceCatalogSnapshot {
-            actor_id: kairos_primitives::runtime::ActorId::new(actor_id)
-                .map_err(|error| ContractError::Invalid(error.to_string()))?,
-            workspace_id: kairos_primitives::runtime::WorkspaceId::new("workspace:reference")
-                .expect("valid reference workspace"),
-            generation: watermark.generation,
-            event_sequence: watermark.event_sequence,
-            instruments: read_all(
-                &transaction,
-                "reference_instruments_current",
-                "instrument_id",
-            )?,
-            markets: read_all(&transaction, "reference_markets_current", "market_id")?,
-            ..ReferenceCatalogSnapshot::default()
-        };
-        transaction.commit().map_err(transport)?;
-        Ok(snapshot)
     }
 
     pub fn watermark(&self) -> ContractResult<ReferenceWatermark> {
@@ -470,6 +595,52 @@ impl ReferenceCatalog {
     }
 }
 
+fn coverage_scope_contains(
+    declared: &ReferenceCoverageScope,
+    required: &ReferenceCoverageScope,
+) -> bool {
+    match (declared, required) {
+        (
+            ReferenceCoverageScope::ProviderCatalog { binding: declared },
+            ReferenceCoverageScope::ProviderCatalog { binding: required },
+        ) => declared == required,
+        (
+            ReferenceCoverageScope::VenueListings {
+                venue_ids: declared_venues,
+                instrument_kind: declared_kind,
+            },
+            ReferenceCoverageScope::VenueListings {
+                venue_ids: required_venues,
+                instrument_kind: required_kind,
+            },
+        )
+        | (
+            ReferenceCoverageScope::VenueMarkets {
+                venue_ids: declared_venues,
+                instrument_kind: declared_kind,
+            },
+            ReferenceCoverageScope::VenueMarkets {
+                venue_ids: required_venues,
+                instrument_kind: required_kind,
+            },
+        ) => {
+            declared_kind == required_kind
+                && required_venues
+                    .iter()
+                    .all(|required| declared_venues.contains(required))
+        },
+        (
+            ReferenceCoverageScope::UnderlyingOptions {
+                underlying_instrument_ids: declared,
+            },
+            ReferenceCoverageScope::UnderlyingOptions {
+                underlying_instrument_ids: required,
+            },
+        ) => required.iter().all(|value| declared.contains(value)),
+        _ => false,
+    }
+}
+
 fn read_lifecycle_events_after(
     connection: &Connection,
     sequence: Sequence,
@@ -519,6 +690,51 @@ impl ReferenceReadSession {
             watermark: self.watermark,
             counts: read_stats(&self.connection)?,
             integrity: read_integrity_stats(&self.connection)?,
+        })
+    }
+
+    /// Resolve provider-native observation evidence without guessing a venue
+    /// from the listing, symbol, or provider name.
+    pub fn resolve_venue_identifier(
+        &self,
+        query: &VenueIdentifierResolutionQuery,
+    ) -> ContractResult<VenueIdentifierResolutionResponse> {
+        if query.provider_product.trim().is_empty() || query.identifier.trim().is_empty() {
+            return Err(ContractError::Invalid(
+                "provider_product and identifier are required".into(),
+            ));
+        }
+        let payloads = self
+            .connection
+            .query_row(
+                "SELECT mapping.payload,venue.payload
+                 FROM reference_venue_identifier_mappings_current mapping
+                 JOIN reference_venues_current venue ON venue.venue_id=mapping.venue_id
+                 WHERE mapping.provider = ? AND mapping.provider_product = ?
+                   AND mapping.identifier_kind = ? AND mapping.identifier = ?
+                   AND mapping.status IN ('active', 'trading')
+                   AND venue.status IN ('active', 'trading')",
+                params![
+                    query.provider.as_str(),
+                    query.provider_product,
+                    query.identifier_kind.as_str(),
+                    query.identifier
+                ],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()
+            .map_err(transport)?
+            .map(|(mapping, venue)| {
+                Ok((
+                    decode_payload::<VenueIdentifierMapping>(&mapping)?,
+                    decode_payload::<Venue>(&venue)?,
+                ))
+            })
+            .transpose()?;
+        Ok(VenueIdentifierResolutionResponse {
+            mapping: payloads.as_ref().map(|(mapping, _)| mapping.clone()),
+            venue: payloads.map(|(_, venue)| venue),
+            watermark: self.watermark,
         })
     }
 
@@ -681,6 +897,437 @@ impl ReferenceReadSession {
             })
         })
         .collect()
+    }
+
+    pub fn venues(&self, query: &VenueSearchQuery) -> ContractResult<Vec<Venue>> {
+        let mut builder = RecordQuery::new("reference_venues_current", "venue_id", &query.page)?;
+        builder.ids(query.venue_ids.as_deref())?;
+        builder.search(query.search.as_deref())?;
+        builder.filter_text("mic", query.mic.as_deref());
+        builder.filter_text("venue_kind", query.venue_kind.as_ref());
+        if let Some(role) = query.role {
+            builder.clause(
+                "EXISTS (SELECT 1 FROM json_each(payload, '$.roles') WHERE value = ?)",
+                Value::Text(role.as_str().to_owned()),
+            );
+        }
+        builder.filter_text("status", query.status.as_ref());
+        builder.active_only(query.active_only);
+        read_typed_records(&self.connection, builder)
+    }
+
+    pub fn search_venues(&self, query: &VenueSearchQuery) -> ContractResult<VenueSearchResponse> {
+        let venues = self.venues(query)?;
+        Ok(VenueSearchResponse {
+            next_cursor: next_offset_cursor(&query.page, venues.len()),
+            evidence: self.query_evidence(
+                ReferenceFactKind::Venue,
+                !venues.is_empty(),
+                query.coverage_scope.as_ref(),
+            )?,
+            venues,
+        })
+    }
+
+    pub fn venue_listings(
+        &self,
+        query: &VenueListingSearchQuery,
+    ) -> ContractResult<Vec<VenueListing>> {
+        let mut builder = RecordQuery::new(
+            "reference_venue_listings_current",
+            "listing_id",
+            &query.page,
+        )?;
+        builder.ids(query.listing_ids.as_deref())?;
+        builder.search(query.search.as_deref())?;
+        builder.filter_text("instrument_id", query.instrument_id.as_deref());
+        builder.filter_text("listing_venue_id", query.listing_venue_id.as_deref());
+        builder.filter_text("listing_symbol", query.listing_symbol.as_deref());
+        builder.filter_text("status", query.status.as_ref());
+        builder.active_only(query.active_only);
+        read_typed_records(&self.connection, builder)
+    }
+
+    pub fn search_venue_listings(
+        &self,
+        query: &VenueListingSearchQuery,
+    ) -> ContractResult<ListingSearchResponse> {
+        let listings = self.venue_listings(query)?;
+        Ok(ListingSearchResponse {
+            next_cursor: next_offset_cursor(&query.page, listings.len()),
+            evidence: self.query_evidence(
+                ReferenceFactKind::Listing,
+                !listings.is_empty(),
+                query.coverage_scope.as_ref(),
+            )?,
+            listings,
+        })
+    }
+
+    pub fn venue_markets(
+        &self,
+        query: &VenueMarketSearchQuery,
+    ) -> ContractResult<Vec<VenueMarket>> {
+        let mut builder =
+            RecordQuery::new("reference_venue_markets_current", "market_id", &query.page)?;
+        builder.ids(query.market_ids.as_deref())?;
+        builder.search(query.search.as_deref())?;
+        builder.filter_text("instrument_id", query.instrument_id.as_deref());
+        if let Some(underlying_instrument_id) = query.underlying_instrument_id.as_deref() {
+            builder.clause(
+                "instrument_id IN (SELECT instrument_id FROM reference_instruments_current WHERE underlying_instrument_id = ?)",
+                Value::Text(underlying_instrument_id.to_string()),
+            );
+        }
+        builder.filter_text("execution_venue_id", query.execution_venue_id.as_deref());
+        builder.filter_text("origin_listing_id", query.origin_listing_id.as_deref());
+        builder.filter_text("venue_symbol", query.venue_symbol.as_deref());
+        if let Some(instrument_kind) = query.instrument_kind {
+            builder.clause(
+                "instrument_id IN (SELECT instrument_id FROM reference_instruments_current WHERE instrument_type = ?)",
+                Value::Text(instrument_kind.as_str().to_owned()),
+            );
+        }
+        builder.filter_text("status", query.status.as_ref());
+        builder.active_only(query.active_only);
+        read_typed_records(&self.connection, builder)
+    }
+
+    pub fn search_venue_markets(
+        &self,
+        query: &VenueMarketSearchQuery,
+    ) -> ContractResult<MarketSearchResponse> {
+        let markets = self.venue_markets(query)?;
+        let mut instruments = BTreeMap::new();
+        for instrument_id in markets
+            .iter()
+            .map(|market| &market.instrument_id)
+            .collect::<BTreeSet<_>>()
+        {
+            let instrument = read_payload_optional::<Instrument>(
+                &self.connection,
+                "SELECT payload FROM reference_instruments_current WHERE instrument_id = ?",
+                instrument_id.as_str(),
+            )?
+            .ok_or_else(|| {
+                ContractError::Invalid(format!(
+                    "Reference market points to missing instrument {instrument_id}"
+                ))
+            })?;
+            instruments.insert(instrument.instrument_id.clone(), instrument);
+        }
+        Ok(MarketSearchResponse {
+            next_cursor: next_offset_cursor(&query.page, markets.len()),
+            evidence: self.query_evidence(
+                ReferenceFactKind::Market,
+                !markets.is_empty(),
+                query.coverage_scope.as_ref(),
+            )?,
+            markets,
+            instruments,
+        })
+    }
+
+    pub fn search_instruments(
+        &self,
+        query: &InstrumentSearchQuery,
+    ) -> ContractResult<InstrumentSearchResponse> {
+        let instruments = self.instruments(query)?;
+        Ok(InstrumentSearchResponse {
+            next_cursor: next_offset_cursor(&query.page, instruments.len()),
+            evidence: self.query_evidence(
+                ReferenceFactKind::Instrument,
+                !instruments.is_empty(),
+                query.coverage_scope.as_ref(),
+            )?,
+            instruments,
+        })
+    }
+
+    pub fn provider_catalog_memberships(
+        &self,
+        query: &ProviderCatalogMembershipQuery,
+    ) -> ContractResult<Vec<ProviderCatalogMembership>> {
+        let mut builder = RecordQuery::new(
+            "reference_provider_catalog_memberships_current",
+            "source_id || ':' || instrument_id",
+            &query.page,
+        )?;
+        push_in_filter(
+            &mut builder.sql,
+            &mut builder.values,
+            "source_id",
+            query.source_ids.as_deref(),
+        )?;
+        push_in_filter(
+            &mut builder.sql,
+            &mut builder.values,
+            "instrument_id",
+            query.instrument_ids.as_deref(),
+        )?;
+        builder.filter_text("provider_symbol", query.provider_symbol.as_deref());
+        builder.filter_text("provider_product", query.provider_product.as_deref());
+        builder.filter_text("status", query.status.as_ref());
+        builder.active_only(query.active_only);
+        read_typed_records(&self.connection, builder)
+    }
+
+    /// Resolve all Reference facts needed for one market decision from this
+    /// session's single SQLite read transaction and watermark.
+    pub fn resolve_market(
+        &self,
+        query: &MarketResolutionQuery,
+    ) -> ContractResult<MarketResolutionResponse> {
+        if query.market_id.is_none() && query.instrument_id.is_none() {
+            return Err(ContractError::Invalid(
+                "market_id or instrument_id is required".into(),
+            ));
+        }
+        let markets = self.venue_markets(&VenueMarketSearchQuery {
+            market_ids: query.market_id.clone().map(|value| vec![value]),
+            instrument_id: query.instrument_id.clone(),
+            execution_venue_id: query.execution_venue_id.clone(),
+            active_only: query.active_only,
+            coverage_scope: query.coverage_scope.clone(),
+            page: ReferencePage {
+                limit: Some(2),
+                offset: 0,
+            },
+            ..Default::default()
+        })?;
+        let candidate_count = markets.len() as u64;
+        let evidence = self.query_evidence(
+            ReferenceFactKind::Market,
+            !markets.is_empty(),
+            query.coverage_scope.as_ref(),
+        )?;
+        let [market] = markets.as_slice() else {
+            return Ok(MarketResolutionResponse {
+                resolution: None,
+                candidate_count,
+                evidence,
+            });
+        };
+        let instrument = read_payload_optional::<Instrument>(
+            &self.connection,
+            "SELECT payload FROM reference_instruments_current WHERE instrument_id = ?",
+            market.instrument_id.as_str(),
+        )?
+        .ok_or_else(|| {
+            ContractError::Invalid(format!(
+                "Reference market points to missing instrument {}",
+                market.instrument_id
+            ))
+        })?;
+        let venue = read_payload_optional::<Venue>(
+            &self.connection,
+            "SELECT payload FROM reference_venues_current WHERE venue_id = ?",
+            market.execution_venue_id.as_str(),
+        )?
+        .ok_or_else(|| {
+            ContractError::Invalid(format!(
+                "Reference market points to missing execution venue {}",
+                market.execution_venue_id
+            ))
+        })?;
+        let origin_listing = market
+            .origin_listing_id
+            .as_ref()
+            .map(|listing_id| {
+                read_payload_optional::<VenueListing>(
+                    &self.connection,
+                    "SELECT payload FROM reference_venue_listings_current WHERE listing_id = ?",
+                    listing_id.as_str(),
+                )
+            })
+            .transpose()?
+            .flatten();
+        let provider_catalog_memberships =
+            self.provider_catalog_memberships(&ProviderCatalogMembershipQuery {
+                instrument_ids: Some(vec![market.instrument_id.clone()]),
+                active_only: true,
+                page: ReferencePage {
+                    limit: Some(256),
+                    offset: 0,
+                },
+                ..Default::default()
+            })?;
+        Ok(MarketResolutionResponse {
+            resolution: Some(MarketResolution {
+                instrument,
+                market: market.clone(),
+                venue,
+                origin_listing,
+                provider_catalog_memberships,
+            }),
+            candidate_count,
+            evidence,
+        })
+    }
+
+    /// Resolve a provider-native symbol without manufacturing a canonical id
+    /// when the result is unknown or ambiguous.
+    pub fn resolve_participant_symbol(
+        &self,
+        query: &ParticipantSymbolResolutionQuery,
+    ) -> ContractResult<ParticipantSymbolResolutionResponse> {
+        if query.product.trim().is_empty() {
+            return Err(ContractError::Invalid("product must not be empty".into()));
+        }
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT m.payload
+                 FROM reference_provider_catalog_memberships_current m
+                 JOIN reference_source_registry s ON s.source_id = m.source_id
+                 WHERE s.provider_id = ? AND m.provider_product = ?
+                   AND LOWER(m.provider_symbol) = LOWER(?)
+                   AND m.status IN ('active', 'trading')
+                 ORDER BY m.source_id, m.instrument_id LIMIT 3",
+            )
+            .map_err(transport)?;
+        let rows = statement
+            .query_map(
+                params![
+                    query.participant.as_str(),
+                    query.product.trim(),
+                    query.source_symbol.as_str()
+                ],
+                |row| row.get::<_, String>(0),
+            )
+            .map_err(transport)?;
+        let memberships = rows
+            .map(|row| decode_payload::<ProviderCatalogMembership>(&row.map_err(transport)?))
+            .collect::<ContractResult<Vec<_>>>()?;
+        let mut matches = Vec::new();
+        for membership in memberships {
+            let Some(instrument) = read_payload_optional::<Instrument>(
+                &self.connection,
+                "SELECT payload FROM reference_instruments_current WHERE instrument_id = ?",
+                membership.instrument_id.as_str(),
+            )?
+            else {
+                continue;
+            };
+            if query
+                .instrument_kind
+                .is_some_and(|kind| instrument.instrument_type != kind)
+            {
+                continue;
+            }
+            let listings = self.venue_listings(&VenueListingSearchQuery {
+                instrument_id: Some(instrument.instrument_id.clone()),
+                active_only: true,
+                page: ReferencePage {
+                    limit: Some(2),
+                    offset: 0,
+                },
+                ..Default::default()
+            })?;
+            let markets = self.venue_markets(&VenueMarketSearchQuery {
+                instrument_id: Some(instrument.instrument_id.clone()),
+                venue_symbol: Symbol::new(query.source_symbol.as_str()).ok(),
+                active_only: true,
+                page: ReferencePage {
+                    limit: Some(2),
+                    offset: 0,
+                },
+                ..Default::default()
+            })?;
+            matches.push(ParticipantSymbolResolution {
+                instrument,
+                listing: (listings.len() == 1).then(|| listings[0].clone()),
+                market: (markets.len() == 1).then(|| markets[0].clone()),
+                membership,
+            });
+        }
+        let evidence = self.query_evidence(
+            ReferenceFactKind::ProviderCatalogMembership,
+            !matches.is_empty(),
+            query.coverage_scope.as_ref(),
+        )?;
+        Ok(ParticipantSymbolResolutionResponse { matches, evidence })
+    }
+
+    fn query_evidence(
+        &self,
+        fact_kind: ReferenceFactKind,
+        found: bool,
+        required_scope: Option<&ReferenceCoverageScope>,
+    ) -> ContractResult<ReferenceQueryEvidence> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT payload FROM reference_coverage_current ORDER BY coverage_id LIMIT 10000",
+            )
+            .map_err(transport)?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(transport)?;
+        let coverages = rows
+            .map(|row| decode_payload::<ReferenceCoverage>(&row.map_err(transport)?))
+            .collect::<ContractResult<Vec<_>>>()?;
+        let fact_coverages = coverages
+            .into_iter()
+            .filter(|coverage| coverage.fact_kinds.contains(&fact_kind))
+            .collect::<Vec<_>>();
+        let applicable = fact_coverages
+            .iter()
+            .filter(|coverage| {
+                required_scope
+                    .is_some_and(|required| coverage_scope_contains(&coverage.scope, required))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let conclusion = if found {
+            if fact_coverages.iter().any(|coverage| {
+                coverage.state == CoverageState::Usable
+                    && coverage.completeness == CoverageCompleteness::CompleteForDeclaredScope
+            }) {
+                ReferenceKnowledgeConclusion::Found
+            } else if fact_coverages
+                .iter()
+                .any(|coverage| coverage.state == CoverageState::Stale)
+            {
+                ReferenceKnowledgeConclusion::KnownButStale
+            } else {
+                ReferenceKnowledgeConclusion::Found
+            }
+        } else if applicable.iter().any(|coverage| {
+            coverage.state == CoverageState::Usable
+                && coverage.completeness == CoverageCompleteness::CompleteForDeclaredScope
+        }) {
+            ReferenceKnowledgeConclusion::NotFoundInCoveredScope
+        } else if applicable
+            .iter()
+            .any(|coverage| coverage.state == CoverageState::Unavailable)
+        {
+            ReferenceKnowledgeConclusion::SourceUnavailable
+        } else if applicable.iter().any(|coverage| {
+            matches!(
+                coverage.state,
+                CoverageState::Waiting | CoverageState::Scanning | CoverageState::Promoting
+            )
+        }) {
+            ReferenceKnowledgeConclusion::Preparing
+        } else {
+            ReferenceKnowledgeConclusion::UnknownOutsideCoverage
+        };
+        Ok(ReferenceQueryEvidence {
+            watermark: self.watermark,
+            conclusion,
+            coverages: fact_coverages
+                .into_iter()
+                .map(|coverage| ReferenceCoverageEvidence {
+                    coverage_id: coverage.coverage_id,
+                    source_id: coverage.source_id,
+                    scope: coverage.scope,
+                    completeness: coverage.completeness,
+                    state: coverage.state,
+                    last_success_unix_nanos: coverage.last_success_unix_nanos,
+                })
+                .collect(),
+        })
     }
 
     pub fn listings(&self, query: &ListingCatalogQuery) -> ContractResult<Vec<Listing>> {
@@ -865,6 +1512,11 @@ fn validate_page(page: &ReferencePage) -> ContractResult<()> {
     }
     sqlite_integer(page.offset, "offset")?;
     Ok(())
+}
+
+fn next_offset_cursor(page: &ReferencePage, returned: usize) -> Option<String> {
+    let limit = page.limit?;
+    (returned as u64 == limit).then(|| format!("offset:{}", page.offset + limit))
 }
 
 fn search_pattern(search: &str) -> ContractResult<String> {
@@ -1222,20 +1874,6 @@ fn read_payload_optional<T: serde::de::DeserializeOwned>(
     payload.map(|payload| decode_payload(&payload)).transpose()
 }
 
-fn read_all<T: serde::de::DeserializeOwned>(
-    connection: &Connection,
-    table: &str,
-    key: &str,
-) -> ContractResult<Vec<T>> {
-    let sql = format!("SELECT payload FROM {table} ORDER BY {key}");
-    let mut statement = connection.prepare(&sql).map_err(transport)?;
-    let rows = statement
-        .query_map([], |row| row.get::<_, String>(0))
-        .map_err(transport)?;
-    rows.map(|row| decode_payload(&row.map_err(transport)?))
-        .collect()
-}
-
 fn decode_payload<T: serde::de::DeserializeOwned>(payload: &str) -> ContractResult<T> {
     serde_json::from_str(payload)
         .map_err(|error| ContractError::Invalid(format!("decode Reference SQLite row: {error}")))
@@ -1256,12 +1894,113 @@ fn transport(error: impl std::fmt::Display) -> ContractError {
 
 #[cfg(test)]
 mod tests {
-    use kairos_primitives::reference::{MarketId, Symbol};
+    use kairos_primitives::reference::{InstrumentId, InstrumentKind, MarketId, Symbol, VenueId};
 
     use super::{
         InstrumentAvailabilityQuery, MarketCatalogQuery, MarketSearchQuery, ReferenceCatalog,
-        ReferencePage,
+        ReferencePage, VenueIdentifierKind, VenueIdentifierResolutionQuery,
+        coverage_scope_contains,
     };
+
+    #[test]
+    fn declared_coverage_must_contain_the_requested_scope() {
+        let xnas = VenueId::new("venue:xnas").unwrap();
+        let iex = VenueId::new("venue:xiex").unwrap();
+        let declared = crate::ReferenceCoverageScope::VenueMarkets {
+            venue_ids: vec![xnas.clone(), iex.clone()],
+            instrument_kind: InstrumentKind::Equity,
+        };
+        assert!(coverage_scope_contains(
+            &declared,
+            &crate::ReferenceCoverageScope::VenueMarkets {
+                venue_ids: vec![iex],
+                instrument_kind: InstrumentKind::Equity,
+            }
+        ));
+        assert!(!coverage_scope_contains(
+            &declared,
+            &crate::ReferenceCoverageScope::VenueListings {
+                venue_ids: vec![xnas],
+                instrument_kind: InstrumentKind::Equity,
+            }
+        ));
+        assert!(!coverage_scope_contains(
+            &crate::ReferenceCoverageScope::UnderlyingOptions {
+                underlying_instrument_ids: vec![InstrumentId::new("instrument:aapl").unwrap()],
+            },
+            &crate::ReferenceCoverageScope::UnderlyingOptions {
+                underlying_instrument_ids: vec![InstrumentId::new("instrument:spy").unwrap()],
+            }
+        ));
+    }
+
+    #[test]
+    fn venue_identifier_resolution_joins_mapping_and_venue_at_one_watermark() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("reference.sqlite");
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        let venue = serde_json::json!({
+            "venue_id": "venue:baty",
+            "name": "Cboe BYX",
+            "venue_kind": "regulated_exchange",
+            "roles": ["execution"],
+            "mic": "BATY",
+            "status": "active"
+        });
+        let mapping = serde_json::json!({
+            "source_id": "massive-equity",
+            "provider": "massive",
+            "provider_product": "equity",
+            "identifier_kind": "exchange",
+            "identifier": "19",
+            "venue_id": "venue:baty",
+            "status": "active"
+        });
+        connection.execute_batch(
+            "CREATE TABLE reference_meta(id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL, generation INTEGER NOT NULL, event_sequence INTEGER NOT NULL, committed_at_unix_nanos INTEGER NOT NULL);
+             INSERT INTO reference_meta VALUES(1,10,12,20,30);
+             CREATE TABLE reference_venues_current(venue_id TEXT PRIMARY KEY,status TEXT NOT NULL,payload TEXT NOT NULL);
+             CREATE TABLE reference_venue_identifier_mappings_current(mapping_key TEXT PRIMARY KEY,provider TEXT NOT NULL,provider_product TEXT NOT NULL,identifier_kind TEXT NOT NULL,identifier TEXT NOT NULL,venue_id TEXT NOT NULL,status TEXT NOT NULL,payload TEXT NOT NULL);"
+        ).unwrap();
+        connection
+            .execute(
+                "INSERT INTO reference_venues_current VALUES(?,?,?)",
+                rusqlite::params!["venue:baty", "active", venue.to_string()],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO reference_venue_identifier_mappings_current VALUES(?,?,?,?,?,?,?,?)",
+                rusqlite::params![
+                    "massive|equity|exchange|19",
+                    "massive",
+                    "equity",
+                    "exchange",
+                    "19",
+                    "venue:baty",
+                    "active",
+                    mapping.to_string()
+                ],
+            )
+            .unwrap();
+        drop(connection);
+
+        let session = ReferenceCatalog::open(&path)
+            .unwrap()
+            .read_session()
+            .unwrap();
+        let response = session
+            .resolve_venue_identifier(&VenueIdentifierResolutionQuery {
+                provider: kairos_primitives::market::Provider::new("massive").unwrap(),
+                provider_product: "equity".into(),
+                identifier_kind: VenueIdentifierKind::Exchange,
+                identifier: "19".into(),
+            })
+            .unwrap();
+        assert_eq!(response.watermark.generation.get(), 12);
+        assert_eq!(response.mapping.unwrap().venue_id.as_str(), "venue:baty");
+        assert_eq!(response.venue.unwrap().mic.unwrap().as_str(), "BATY");
+    }
 
     #[test]
     fn reader_is_read_only_and_returns_consistent_catalog_page() {
@@ -1274,7 +2013,7 @@ mod tests {
                     id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL,\
                     generation INTEGER NOT NULL, event_sequence INTEGER NOT NULL,\
                     committed_at_unix_nanos INTEGER NOT NULL);\
-                 INSERT INTO reference_meta VALUES(1, 6, 7, 11, 13);\
+                 INSERT INTO reference_meta VALUES(1, 10, 7, 11, 13);\
                  CREATE TABLE reference_markets_current(\
                     market_id TEXT PRIMARY KEY, instrument_id TEXT, listing_id TEXT,\
                     exchange_id TEXT, instrument_kind TEXT, asset_type TEXT,\
@@ -1343,14 +2082,6 @@ mod tests {
         assert_eq!(catalog_page.watermark.generation, 7.into());
         assert_eq!(catalog_page.markets.len(), 1);
         assert_eq!(catalog_page.instruments.len(), 1);
-
-        let scoped = reader.market_snapshot("reference-actor").unwrap();
-        assert_eq!(
-            (scoped.generation, scoped.event_sequence),
-            (7.into(), 11.into())
-        );
-        assert_eq!(scoped.markets.len(), 1);
-        assert_eq!(scoped.instruments.len(), 1);
     }
 
     #[test]
@@ -1362,7 +2093,7 @@ mod tests {
             .execute_batch(
                 "PRAGMA journal_mode=WAL;
                  CREATE TABLE reference_meta(id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL, generation INTEGER NOT NULL, event_sequence INTEGER NOT NULL, committed_at_unix_nanos INTEGER NOT NULL);
-                 INSERT INTO reference_meta VALUES(1,6,3,7,11);
+                 INSERT INTO reference_meta VALUES(1,10,3,7,11);
                  CREATE TABLE reference_markets_current(market_id TEXT PRIMARY KEY, instrument_id TEXT, listing_id TEXT, exchange_id TEXT, instrument_kind TEXT, asset_type TEXT, underlying_instrument_id TEXT, venue_symbol TEXT, status TEXT, effective_to_unix_nanos INTEGER, payload TEXT);
                  CREATE TABLE reference_instruments_current(instrument_id TEXT PRIMARY KEY, payload TEXT);
                  CREATE TABLE reference_exchanges_current(exchange_id TEXT PRIMARY KEY, status TEXT, payload TEXT);
@@ -1458,7 +2189,7 @@ mod tests {
                     id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL,\
                     generation INTEGER NOT NULL, event_sequence INTEGER NOT NULL,\
                     committed_at_unix_nanos INTEGER NOT NULL);\
-                 INSERT INTO reference_meta VALUES(1, 6, 7, 11, 13);\
+                 INSERT INTO reference_meta VALUES(1, 10, 7, 11, 13);\
                  CREATE TABLE reference_exchanges_current(exchange_id TEXT PRIMARY KEY, payload TEXT);\
                  CREATE TABLE reference_assets_current(asset_id TEXT PRIMARY KEY, payload TEXT);\
                  CREATE TABLE reference_instruments_current(instrument_id TEXT PRIMARY KEY, payload TEXT);\
@@ -1561,7 +2292,7 @@ mod tests {
         connection
             .execute_batch(
                 "CREATE TABLE reference_meta(id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL, generation INTEGER NOT NULL, event_sequence INTEGER NOT NULL, committed_at_unix_nanos INTEGER NOT NULL);
-                 INSERT INTO reference_meta VALUES(1,6,4,9,11);
+                 INSERT INTO reference_meta VALUES(1,10,4,9,11);
                  CREATE TABLE reference_provider_records(provider TEXT NOT NULL, record_kind TEXT NOT NULL, record_id TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(provider, record_kind, record_id));",
             )
             .unwrap();

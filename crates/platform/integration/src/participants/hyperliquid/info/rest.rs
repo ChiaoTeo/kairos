@@ -36,7 +36,7 @@ impl HyperliquidInfoRestConnection {
         self.service.endpoint()
     }
 
-    async fn info(&mut self, request: Value) -> Result<Value, IntegrationError> {
+    async fn info(&self, request: Value) -> Result<Value, IntegrationError> {
         let endpoint = self.service.endpoint().to_owned();
         self.service
             .client()
@@ -45,43 +45,46 @@ impl HyperliquidInfoRestConnection {
             .map_err(|error| IntegrationError::Transport(error.to_string()))
     }
 
-    async fn contexts(&mut self) -> Result<Value, IntegrationError> {
+    async fn contexts(&self) -> Result<Value, IntegrationError> {
         self.info(json!({"type": "metaAndAssetCtxs"})).await
     }
 
     pub async fn fetch_perpetual_instruments(
-        &mut self,
+        &self,
     ) -> Result<ExternalInstrumentCatalog, IntegrationError> {
         Ok(ExternalInstrumentCatalog {
             participant: participant(),
             instruments: perpetual_instruments(&self.contexts().await?)?,
+            venues: Vec::new(),
         })
     }
 
     pub async fn fetch_spot_instruments(
-        &mut self,
+        &self,
     ) -> Result<ExternalInstrumentCatalog, IntegrationError> {
         Ok(ExternalInstrumentCatalog {
             participant: participant(),
             instruments: spot_instruments(
                 &self.info(json!({"type": "spotMetaAndAssetCtxs"})).await?,
             )?,
+            venues: Vec::new(),
         })
     }
 }
 
 impl InstrumentCatalogQuery for HyperliquidInfoRestConnection {
-    async fn fetch_instruments(&mut self) -> Result<ExternalInstrumentCatalog, IntegrationError> {
+    async fn fetch_instruments(&self) -> Result<ExternalInstrumentCatalog, IntegrationError> {
         let mut instruments = self.fetch_perpetual_instruments().await?.instruments;
         instruments.extend(self.fetch_spot_instruments().await?.instruments);
         Ok(ExternalInstrumentCatalog {
             participant: participant(),
             instruments,
+            venues: Vec::new(),
         })
     }
 
     async fn fetch_instruments_page(
-        &mut self,
+        &self,
         cursor: Option<&str>,
         limit: usize,
     ) -> Result<ExternalInstrumentCatalogPage, IntegrationError> {
@@ -90,6 +93,7 @@ impl InstrumentCatalogQuery for HyperliquidInfoRestConnection {
                 catalog: ExternalInstrumentCatalog {
                     participant: participant(),
                     instruments: Vec::new(),
+                    venues: Vec::new(),
                 },
                 next_cursor: None,
                 complete: true,
@@ -128,6 +132,7 @@ impl MarketQuoteQuery for HyperliquidInfoRestConnection {
                     .transpose()
                     .map_err(payload)?;
                 Ok(MarketQuote {
+                    venue: Default::default(),
                     symbol: symbol.clone(),
                     bid_price: price,
                     bid_quantity: None,

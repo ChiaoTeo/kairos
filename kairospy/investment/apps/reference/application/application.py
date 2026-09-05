@@ -10,18 +10,26 @@ from kairospy.contracts.reference.events import ReferenceEventVariant
 from kairospy.infrastructure.protocol import LiveEventSource
 from kairospy.contracts.reference import (
     ReferenceAsset,
-    ReferenceCatalogSnapshot,
+    ReferenceCatalogStatus,
     ReferenceExchange,
     ReferenceHealthResponse,
     ReferenceInstrument,
+    ReferenceInstrumentSearchResponse,
     ReferenceListing,
     ReferenceMarket,
+    ReferenceVenueMarket,
     ReferenceOptionCoverage,
     ReferenceRuntimeStatusResponse,
 )
 
 if TYPE_CHECKING:
-    from kairospy.contracts.reference import ReferenceInstrumentAvailability
+    from kairospy.contracts.reference import (
+        ReferenceInstrumentAvailability,
+        ReferenceProviderCatalogMembership,
+        ReferenceVenueListingSearchResponse,
+        ReferenceVenueMarketSearchResponse,
+        ReferenceVenueSearchResponse,
+    )
 from kairospy.primitives.reference import (
     ExchangeId,
     InstrumentId,
@@ -221,16 +229,16 @@ class ReferenceApplication:
         cursor_key: tuple[str, str, int] | None,
     ) -> None:
         client = self._require_client()
-        snapshot_factory = getattr(client, "snapshot", None)
-        if snapshot_factory is None:
-            raise RuntimeError("Reference client does not support snapshot reads")
-        with snapshot_factory() as query:
+        session_factory = getattr(client, "read_session", None)
+        if session_factory is None:
+            raise RuntimeError("Reference client does not support read sessions")
+        with session_factory() as query:
             generation = int(query.generation)
             event_sequence = int(query.event_sequence)
         if generation < observed_generation or event_sequence < observed_sequence:
             self._catalog_stale = True
             raise RuntimeError(
-                "Reference catalog snapshot trails its change notification"
+                "Reference catalog read session trails its change notification"
             )
         self._generation = generation
         self._event_sequence = event_sequence
@@ -298,7 +306,7 @@ class ReferenceApplication:
     def providers(self) -> dict[str, Any]:
         return dict(self._require_client().providers())
 
-    def catalog(self) -> ReferenceCatalogSnapshot:
+    def catalog(self) -> ReferenceCatalogStatus:
         return self._require_client().catalog()
 
     def refresh(self, *, source: str | None = None) -> dict[str, Any]:
@@ -314,14 +322,14 @@ class ReferenceApplication:
         return dict(self._require_client().set_option_underlying(underlying, enabled))
 
     @contextmanager
-    def snapshot(self) -> Iterator[ReferenceApplication]:
-        """Pin a group of strategy reads to one committed catalog generation."""
+    def read_session(self) -> Iterator[ReferenceApplication]:
+        """Use one committed generation for the enclosed bounded reads."""
 
         client = self._require_client()
-        snapshot_factory = getattr(client, "snapshot", None)
-        if snapshot_factory is None:
-            raise RuntimeError("Reference client does not support snapshot reads")
-        with snapshot_factory() as query:
+        session_factory = getattr(client, "read_session", None)
+        if session_factory is None:
+            raise RuntimeError("Reference client does not support read sessions")
+        with session_factory() as query:
             yield ReferenceApplication(
                 query,
                 generation=int(query.generation),
@@ -420,6 +428,104 @@ class ReferenceApplication:
             expiry_to_unix_nanos=expiry_to_unix_nanos,
             option_right=option_right,
             status=status,
+            active_only=active_only,
+            limit=limit,
+            offset=offset,
+        )
+        return tuple(rows)
+
+    def search_instruments(
+        self,
+        *,
+        query: str | None = None,
+        instrument_type: str | None = None,
+        active_only: bool = True,
+        limit: int = 25,
+        offset: int = 0,
+    ) -> ReferenceInstrumentSearchResponse:
+        """Search current instruments with Reference-owned knowledge evidence."""
+
+        return self._require_client().search_instruments(
+            query=query,
+            instrument_type=instrument_type,
+            active_only=active_only,
+            limit=limit,
+            offset=offset,
+        )
+
+    def find_venues(
+        self,
+        *,
+        query: str | None = None,
+        venue_kind: str | None = None,
+        role: str | None = None,
+        active_only: bool = True,
+        limit: int = 25,
+        offset: int = 0,
+    ) -> ReferenceVenueSearchResponse:
+        return self._require_client().search_venues(
+            query=query,
+            venue_kind=venue_kind,
+            role=role,
+            active_only=active_only,
+            limit=limit,
+            offset=offset,
+        )
+
+    def find_venue_listings(
+        self,
+        *,
+        query: str | None = None,
+        instrument_id: InstrumentId | str | None = None,
+        listing_venue_id: str | None = None,
+        active_only: bool = True,
+        limit: int = 25,
+        offset: int = 0,
+    ) -> ReferenceVenueListingSearchResponse:
+        return self._require_client().search_venue_listings(
+            query=query,
+            instrument_id=_string(instrument_id),
+            listing_venue_id=listing_venue_id,
+            active_only=active_only,
+            limit=limit,
+            offset=offset,
+        )
+
+    def find_venue_markets(
+        self,
+        *,
+        query: str | None = None,
+        instrument_id: InstrumentId | str | None = None,
+        execution_venue_id: str | None = None,
+        origin_listing_id: ListingId | str | None = None,
+        instrument_kind: str | None = None,
+        active_only: bool = True,
+        limit: int = 25,
+        offset: int = 0,
+    ) -> ReferenceVenueMarketSearchResponse:
+        return self._require_client().search_venue_markets(
+            query=query,
+            instrument_id=_string(instrument_id),
+            execution_venue_id=execution_venue_id,
+            origin_listing_id=_string(origin_listing_id),
+            instrument_kind=instrument_kind,
+            active_only=active_only,
+            limit=limit,
+            offset=offset,
+        )
+
+    def find_provider_catalog_memberships(
+        self,
+        *,
+        source_ids: Sequence[str] | None = None,
+        instrument_ids: Sequence[InstrumentId | str] | None = None,
+        active_only: bool = True,
+        limit: int = 256,
+        offset: int = 0,
+    ) -> tuple[ReferenceProviderCatalogMembership, ...]:
+        rows = self._require_client().provider_catalog_memberships(
+            source_ids=source_ids,
+            instrument_ids=_strings(instrument_ids),
             active_only=active_only,
             limit=limit,
             offset=offset,
@@ -562,49 +668,28 @@ class ReferenceApplication:
         )
         return tuple(rows)
 
-    @overload
-    def require_market(self, market_id: MarketId, /) -> ReferenceMarket: ...
-
-    @overload
     def require_market(
-        self,
-        *,
-        symbol: str,
-        exchange: str,
-        instrument_kind: str,
-    ) -> ReferenceMarket: ...
-
-    def require_market(
-        self,
-        market_id: MarketId | None = None,
-        *,
-        symbol: str | None = None,
-        exchange: str | None = None,
-        instrument_kind: str | None = None,
-    ) -> ReferenceMarket:
-        matches = self.find_markets(
-            market_ids=None if market_id is None else (market_id,),
-            symbol=symbol,
-            exchange=exchange,
-            instrument_kind=instrument_kind,
-            active_only=False if market_id is not None else True,
-            limit=2,
+        self, market_id: MarketId, /
+    ) -> ReferenceVenueMarket:
+        response = self._require_client().resolve_market(
+            market_id=str(market_id), active_only=False
         )
-        filters = {
-            "market_id": None if market_id is None else str(market_id),
-            "symbol": symbol,
-            "exchange": exchange,
-            "instrument_kind": instrument_kind,
-        }
-        if not matches:
-            raise ReferenceNotFoundError(f"Reference market not found: {filters}")
-        if len(matches) != 1:
-            raise AmbiguousReferenceError(
-                f"Reference market is ambiguous ({len(matches)} matches): {filters}"
+        if response.resolution is None:
+            conclusion = response.evidence.conclusion
+            if response.candidate_count > 1:
+                raise AmbiguousReferenceError(
+                    f"Reference market is ambiguous ({response.candidate_count} matches): {market_id}"
+                )
+            raise ReferenceNotFoundError(
+                f"Reference market not found: {market_id}; conclusion={conclusion}"
             )
-        return matches[0]
+        if response.candidate_count != 1:
+            raise AmbiguousReferenceError(
+                f"Reference market is ambiguous ({response.candidate_count} matches): {market_id}"
+            )
+        return response.resolution.market
 
-    def market(self, market_id: MarketId) -> ReferenceMarket | None:
+    def market(self, market_id: MarketId) -> ReferenceVenueMarket | None:
         try:
             return self.require_market(market_id)
         except ReferenceNotFoundError:

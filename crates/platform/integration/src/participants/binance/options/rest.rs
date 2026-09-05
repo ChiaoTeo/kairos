@@ -108,7 +108,7 @@ impl AccountQuery for BinanceOptionsRestConnection {
 }
 
 impl InstrumentCatalogQuery for BinanceOptionsRestConnection {
-    async fn fetch_instruments(&mut self) -> Result<ExternalInstrumentCatalog, IntegrationError> {
+    async fn fetch_instruments(&self) -> Result<ExternalInstrumentCatalog, IntegrationError> {
         let value = self
             .service
             .public_get("/eapi/v1/exchangeInfo", &[])
@@ -116,11 +116,12 @@ impl InstrumentCatalogQuery for BinanceOptionsRestConnection {
         Ok(ExternalInstrumentCatalog {
             participant: participant(),
             instruments: market::derivative_instruments(&value, ExternalInstrumentKind::Option)?,
+            venues: Vec::new(),
         })
     }
 
     async fn fetch_instruments_page(
-        &mut self,
+        &self,
         cursor: Option<&str>,
         limit: usize,
     ) -> Result<ExternalInstrumentCatalogPage, IntegrationError> {
@@ -129,6 +130,7 @@ impl InstrumentCatalogQuery for BinanceOptionsRestConnection {
                 catalog: ExternalInstrumentCatalog {
                     participant: participant(),
                     instruments: Vec::new(),
+                    venues: Vec::new(),
                 },
                 next_cursor: None,
                 complete: true,

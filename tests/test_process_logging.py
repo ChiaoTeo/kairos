@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import sys
+import time
 from pathlib import Path
 
 from kairospy.system.apps.components.application.process_logging import (
     current_run_id,
     filter_log_lines,
     parse_since,
+    start_logged_process,
 )
 from kairospy.bin.log_sink import run
 
@@ -76,3 +79,33 @@ def test_process_log_filters_use_structured_fields_and_current_run() -> None:
         run_id=run_id,
         since=parse_since("2026-08-17T07:30:00Z"),
     ) == [lines[-1]]
+
+
+def test_logged_process_termination_reaps_child_and_sink(tmp_path: Path) -> None:
+    process = start_logged_process(
+        [sys.executable, "-c", "import time; print('started'); time.sleep(30)"],
+        component="test-component",
+        log_path=tmp_path / "process.log",
+        cwd=str(Path.cwd()),
+        environment=os.environ.copy(),
+    )
+    child_pid = process.child.pid
+    sink_pid = process.sink.pid
+
+    process.terminate(timeout=2)
+
+    assert process.child.poll() is not None
+    assert process.sink.poll() is not None
+    for pid in (child_pid, sink_pid):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            continue
+        for _ in range(20):
+            time.sleep(0.01)
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                break
+        else:  # pragma: no cover - diagnostic guard for an OS-level leak
+            raise AssertionError(f"process {pid} remained alive")

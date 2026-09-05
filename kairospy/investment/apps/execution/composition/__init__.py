@@ -44,7 +44,9 @@ def build_strategy_access(
         )
     route = client.event_route
     if route is None or route.scope != "instance":
-        raise RuntimeError("Execution connection requires an explicit Instance event route")
+        raise RuntimeError(
+            "Execution connection requires an explicit Instance event route"
+        )
     owner = ExecutionClient(
         client.socket_path,
         workspace_id=instance.workspace.workspace_id,
@@ -55,7 +57,7 @@ def build_strategy_access(
         channel=route.channel,
         timeout=client.timeout,
     )
-    commands = ExecutionCommandClient(
+    commands: object = ExecutionCommandClient(
         owner.control,
         workspace_id=instance.workspace.workspace_id,
         allow_trading=policy.allow_trading,
@@ -64,10 +66,12 @@ def build_strategy_access(
         launch_id=identity.launch_id,
     )
     if decorate_commands is not None:
-        commands = decorate_commands(commands)  # type: ignore[assignment]
+        commands = decorate_commands(commands)
     current_views = owner.current
     if current_views is None:
-        raise RuntimeError("Execution owner client is missing its current-view capability")
+        raise RuntimeError(
+            "Execution owner client is missing its current-view capability"
+        )
     return ExecutionApplication(
         commands,
         current_views,

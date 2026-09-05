@@ -1,0 +1,13 @@
+include "common.fbs";
+
+namespace kairos.reference.v3;
+
+table ProviderCatalogMembership {
+  source_id:string (required);
+  instrument_id:string (required);
+  provider_symbol:string;
+  provider_product:string;
+  status:ReferenceLifecycleStatus = UNKNOWN;
+  effective_from_unix_nanos:ulong;
+  effective_to_unix_nanos:ulong;
+}

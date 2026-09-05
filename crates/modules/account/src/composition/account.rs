@@ -1232,8 +1232,10 @@ fn parse_initial_balance(value: &str) -> Result<Balance, String> {
 }
 
 fn load_instrument_resolver(options: &AccountOptions) -> Result<AccountInstrumentResolver, String> {
-    let _ = options;
-    Ok(AccountInstrumentResolver::default())
+    options.reference_database.as_ref().map_or_else(
+        || Ok(AccountInstrumentResolver::default()),
+        AccountInstrumentResolver::from_database,
+    )
 }
 
 pub fn normalized_provider(provider: &str) -> String {

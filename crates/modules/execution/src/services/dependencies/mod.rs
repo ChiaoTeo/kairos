@@ -18,14 +18,13 @@ use kairos_primitives::decimal::{Money, Price};
 use kairos_primitives::execution::OrderId;
 use kairos_primitives::reference::{InstrumentId, InstrumentKind, MarketId};
 use kairos_primitives::time::UnixNanos;
-use kairos_reference_contract::{ExecutionReferenceSnapshot, Market};
 use rust_decimal::Decimal;
 use serde_json::Value;
 use state::*;
 
 use crate::domain::{
-    CommitmentBasis, CommitmentResource, DependencyWatermarks, ExecuteStrategyIntent,
-    OrderCommitment, OrderSide, OrderType, PlanningQuote, QuoteObservation,
+    AdmissionError, CommitmentBasis, CommitmentResource, DependencyWatermarks,
+    ExecuteStrategyIntent, OrderCommitment, OrderSide, OrderType, PlanningQuote, QuoteObservation,
     RiskAuthorizationContext, SnapshotWatermark, SubmitOrder, decimal_money, decimal_price,
     decimal_quantity, decimal_signed_quantity, ensure_available_capacity, money_from_decimal,
     quantity_from_decimal, validate_market_price, validate_pair_constraints,
@@ -66,7 +65,7 @@ impl ExecutionOrderAdmissionService {
     pub(crate) fn commitment_observation(
         &mut self,
         account_id: &str,
-    ) -> Result<Option<AccountCommitmentObservation>, String> {
+    ) -> Result<Option<AccountCommitmentObservation>, AdmissionError> {
         match self {
             Self::Live(admission) => admission.commitment_observation(account_id).map(Some),
             Self::Simulated => Ok(None),
@@ -78,7 +77,7 @@ impl ExecutionOrderAdmissionService {
         request: &SubmitOrder,
         active_commitments: &[OrderCommitment],
         now: u64,
-    ) -> Result<OrderCommitment, String> {
+    ) -> Result<OrderCommitment, AdmissionError> {
         match self {
             Self::Live(admission) => admission.validate_order(request, active_commitments),
             Self::Simulated => crate::domain::simulation_commitment(request, now),
@@ -89,7 +88,7 @@ impl ExecutionOrderAdmissionService {
         &mut self,
         request: &SubmitOrder,
         route: &crate::domain::ExecutionRouteCandidate,
-    ) -> Result<RiskAuthorizationContext, String> {
+    ) -> Result<RiskAuthorizationContext, AdmissionError> {
         match self {
             Self::Live(admission) => admission.risk_authorization_context(request, route),
             Self::Simulated => Ok(RiskAuthorizationContext {
@@ -106,17 +105,13 @@ pub struct SocketExecutionIntentPlanner {
 }
 
 impl SocketExecutionIntentPlanner {
-    pub fn from_manifest_with_reference_snapshot(
+    pub fn from_manifest_with_reference_catalog(
         system: &mut kairos_conflux::ConfluxSystem,
         path: impl AsRef<Path>,
-        reference_snapshot: Option<ExecutionReferenceSnapshot>,
-    ) -> Result<Self, String> {
-        IntentPlanningContext::from_manifest_with_reference_snapshot(
-            system,
-            path,
-            reference_snapshot,
-        )
-        .map(|context| Self { context })
+        reference: Option<kairos_reference_contract::ReferenceCatalog>,
+    ) -> Result<Self, AdmissionError> {
+        IntentPlanningContext::from_manifest_with_reference_catalog(system, path, reference)
+            .map(|context| Self { context })
     }
 
     pub fn without_market_snapshot(mut self) -> Self {
@@ -126,14 +121,17 @@ impl SocketExecutionIntentPlanner {
 }
 
 impl SocketExecutionIntentPlanner {
-    pub(crate) fn advance_time(&mut self, event_time_unix_nanos: u64) -> Result<(), String> {
+    pub(crate) fn advance_time(
+        &mut self,
+        event_time_unix_nanos: u64,
+    ) -> Result<(), AdmissionError> {
         self.context.advance_time(event_time_unix_nanos)
     }
 
     pub(crate) fn plan_intent(
         &mut self,
         intent: &ExecuteStrategyIntent,
-    ) -> Result<Vec<SubmitOrder>, String> {
+    ) -> Result<Vec<SubmitOrder>, AdmissionError> {
         self.context.plan_intent(intent)
     }
 
@@ -141,7 +139,7 @@ impl SocketExecutionIntentPlanner {
         &mut self,
         instrument_id: &str,
         market_id: Option<&str>,
-    ) -> Result<Option<QuoteObservation>, String> {
+    ) -> Result<Option<QuoteObservation>, AdmissionError> {
         self.context.latest_quote(instrument_id, market_id)
     }
 
@@ -155,17 +153,13 @@ pub struct SocketExecutionOrderAdmission {
 }
 
 impl SocketExecutionOrderAdmission {
-    pub fn from_manifest_with_reference_snapshot(
+    pub fn from_manifest_with_reference_catalog(
         system: &mut kairos_conflux::ConfluxSystem,
         path: impl AsRef<Path>,
-        reference_snapshot: Option<ExecutionReferenceSnapshot>,
-    ) -> Result<Self, String> {
-        OrderAdmissionContext::from_manifest_with_reference_snapshot(
-            system,
-            path,
-            reference_snapshot,
-        )
-        .map(|context| Self { context })
+        reference: Option<kairos_reference_contract::ReferenceCatalog>,
+    ) -> Result<Self, AdmissionError> {
+        OrderAdmissionContext::from_manifest_with_reference_catalog(system, path, reference)
+            .map(|context| Self { context })
     }
 
     pub fn without_market_snapshot(mut self) -> Self {
@@ -188,7 +182,9 @@ impl SocketExecutionOrderAdmission {
         self
     }
 
-    pub fn risk_reservations_adapter(&self) -> Result<SocketExecutionRiskReservations, String> {
+    pub fn risk_reservations_adapter(
+        &self,
+    ) -> Result<SocketExecutionRiskReservations, AdmissionError> {
         self.context.risk_reservations_adapter()
     }
 }
@@ -201,7 +197,7 @@ impl SocketExecutionOrderAdmission {
     pub(crate) fn commitment_observation(
         &self,
         account_id: &str,
-    ) -> Result<AccountCommitmentObservation, String> {
+    ) -> Result<AccountCommitmentObservation, AdmissionError> {
         self.context.commitment_observation(account_id)
     }
 
@@ -209,7 +205,7 @@ impl SocketExecutionOrderAdmission {
         &mut self,
         request: &SubmitOrder,
         active_commitments: &[OrderCommitment],
-    ) -> Result<OrderCommitment, String> {
+    ) -> Result<OrderCommitment, AdmissionError> {
         self.context.validate_order(request, active_commitments)
     }
 
@@ -217,19 +213,25 @@ impl SocketExecutionOrderAdmission {
         &mut self,
         request: &SubmitOrder,
         route: &crate::domain::ExecutionRouteCandidate,
-    ) -> Result<RiskAuthorizationContext, String> {
+    ) -> Result<RiskAuthorizationContext, AdmissionError> {
         self.context.risk_authorization_context(request, route)
     }
 }
 
-fn find_available(response: &[AccountBalanceFact], asset: &str) -> Result<Option<Decimal>, String> {
+fn find_available(
+    response: &[AccountBalanceFact],
+    asset: &str,
+) -> Result<Option<Decimal>, AdmissionError> {
     response
         .iter()
         .find(|balance| balance.asset_code.eq_ignore_ascii_case(asset))
         .and_then(|balance| balance.available.as_ref())
         .map(|value| {
-            Decimal::try_new(value.mantissa(), u32::from(value.scale()))
-                .map_err(|_| "available balance cannot be represented as a decimal".to_string())
+            Decimal::try_new(value.mantissa(), u32::from(value.scale())).map_err(|_| {
+                AdmissionError::DecimalRepresentation {
+                    value_kind: "available balance",
+                }
+            })
         })
         .transpose()
 }
@@ -237,7 +239,7 @@ fn find_available(response: &[AccountBalanceFact], asset: &str) -> Result<Option
 fn find_position(
     response: &[AccountPositionFact],
     instrument: &str,
-) -> Result<Option<Decimal>, String> {
+) -> Result<Option<Decimal>, AdmissionError> {
     response
         .iter()
         .find(|position| position.instrument_id.eq_ignore_ascii_case(instrument))
@@ -246,7 +248,9 @@ fn find_position(
                 position.quantity.mantissa(),
                 u32::from(position.quantity.scale()),
             )
-            .map_err(|_| "position quantity cannot be represented as a decimal".to_string())
+            .map_err(|_| AdmissionError::DecimalRepresentation {
+                value_kind: "position quantity",
+            })
         })
         .transpose()
 }

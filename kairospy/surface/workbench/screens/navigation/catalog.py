@@ -68,7 +68,7 @@ HOME_ACTIONS = (
 
 MARKET_ACTIONS = (
     ActionItem(
-        MarketTask.SEARCH, "查找可以交易的标的", "输入 AAPL、比特币或 BTCUSDT", "1"
+        MarketTask.SEARCH, "查找标的", "输入 AAPL、比特币或 BTCUSDT", "1"
     ),
     ActionItem(
         MarketTask.LIVE, "我的实时行情", "查看、添加或退出当前会话关注的行情", "2"
@@ -101,6 +101,11 @@ MISSING_MARKET_ACTIONS = (
     ActionItem("prepare", "准备这个标的目录", "选择交易所和品种，检查可用来源", "1"),
     ActionItem("retry", "重新搜索", "再次搜索刚才输入的代码或名称", "2"),
     ActionItem("catalog", "浏览现有标的目录", "从已经可用的目录中查找", "3"),
+)
+
+COVERED_EMPTY_MARKET_ACTIONS = (
+    ActionItem("retry", "重新搜索", "再次搜索刚才输入的代码或名称", "1"),
+    ActionItem("catalog", "浏览现有标的目录", "查看已覆盖范围中的其他标的", "2"),
 )
 
 CATALOG_EXCHANGE_ACTIONS = (

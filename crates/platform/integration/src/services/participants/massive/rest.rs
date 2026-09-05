@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use super::reference::MassiveMarketRow;
+use super::reference::{MassiveMarketRow, MassiveVenueRow};
 use crate::transport::http::{ExchangeError, HttpClient};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -253,6 +253,61 @@ impl RestService {
         Err(ExchangeError::InvalidRequest(
             "Massive instrument pagination exceeded safety limit".into(),
         ))
+    }
+
+    pub(crate) async fn load_venues(&self) -> Result<Vec<MassiveVenueRow>, ExchangeError> {
+        let endpoint = format!("{}/v3/reference/exchanges", self.base_url);
+        let payload = self
+            .http
+            .get_json_response_with_headers_and_query(
+                &endpoint,
+                &[("asset_class", "stocks".into()), ("locale", "us".into())],
+                &[("Authorization", format!("Bearer {}", self.api_key))],
+            )
+            .await?
+            .body;
+        let values = match payload.get("results") {
+            Some(Value::Array(values)) => values.clone(),
+            Some(Value::Object(_)) => vec![payload["results"].clone()],
+            _ => {
+                return Err(ExchangeError::InvalidRequest(
+                    "Massive exchanges response has no results".into(),
+                ));
+            },
+        };
+        values
+            .into_iter()
+            .map(|value| {
+                let id = value
+                    .get("id")
+                    .and_then(|value| {
+                        value
+                            .as_str()
+                            .map(str::to_owned)
+                            .or_else(|| value.as_u64().map(|value| value.to_string()))
+                    })
+                    .ok_or_else(|| {
+                        ExchangeError::InvalidRequest(
+                            "Massive exchange record has no identifier".into(),
+                        )
+                    })?;
+                let text = |key: &str| {
+                    value
+                        .get(key)
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                        .filter(|value| !value.trim().is_empty())
+                };
+                Ok(MassiveVenueRow {
+                    id,
+                    participant_id: text("participant_id"),
+                    mic: text("mic"),
+                    operating_mic: text("operating_mic"),
+                    name: text("name").unwrap_or_else(|| "Unnamed venue".into()),
+                    venue_type: text("type").unwrap_or_else(|| "unknown".into()),
+                })
+            })
+            .collect()
     }
 
     pub(crate) async fn historical_bars(
@@ -963,6 +1018,41 @@ mod tests {
         assert!(page.complete);
         assert!(page.rows.is_empty());
         server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn exchange_reference_rows_preserve_provider_ids_and_mics() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buffer = [0u8; 8192];
+            let size = stream.read(&mut buffer).unwrap();
+            let request = String::from_utf8_lossy(&buffer[..size]);
+            let first_line = request.lines().next().unwrap_or_default();
+            assert!(first_line.contains("/v3/reference/exchanges?"));
+            assert!(first_line.contains("asset_class=stocks"));
+            assert!(first_line.contains("locale=us"));
+            let body = r#"{"results":[{"id":19,"participant_id":"Y","mic":"BATY","operating_mic":"XCBO","name":"Cboe BYX","type":"exchange"},{"id":4,"mic":"FINY","name":"FINRA NYSE TRF","type":"TRF"}]}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+
+        let rows = RestService::with_base_url("test-secret", endpoint)
+            .unwrap()
+            .for_equity()
+            .load_venues()
+            .await
+            .unwrap();
+
+        server.join().unwrap();
+        assert_eq!(rows[0].id, "19");
+        assert_eq!(rows[0].mic.as_deref(), Some("BATY"));
+        assert_eq!(rows[1].venue_type, "TRF");
     }
 
     #[tokio::test]

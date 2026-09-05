@@ -19,7 +19,10 @@ from kairospy.system.apps.credentials.application import (
 )
 from kairospy.system.apps.workspace.application import Workspace
 
-from .model_connections import ModelProviderConnectionApplication
+from .model_connections import (
+    ModelProviderCatalogEntry,
+    ModelProviderConnectionApplication,
+)
 from .model_resources import (
     AvailableModelApplication,
     ModelEndpointApplication,
@@ -117,7 +120,7 @@ class AgentResourceApplication:
             )
         return tuple(sorted(configured, key=lambda value: str(value["connection_id"])))
 
-    def provider_catalog(self) -> tuple[dict[str, object], ...]:
+    def provider_catalog(self) -> tuple[ModelProviderCatalogEntry, ...]:
         return ModelProviderConnectionApplication(self.workspace).provider_catalog()
 
     def model_connection(self, connection_id: str) -> dict[str, object]:

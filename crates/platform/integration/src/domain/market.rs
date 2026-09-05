@@ -132,6 +132,8 @@ impl MarketEvent {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MarketQuote {
+    /// Provider-native evidence only; Reference owns canonical venue resolution.
+    pub venue: MarketVenueEvidence,
     pub symbol: ParticipantSymbol,
     pub bid_price: Option<Price>,
     pub bid_quantity: Option<Quantity>,

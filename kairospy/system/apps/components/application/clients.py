@@ -61,7 +61,7 @@ if TYPE_CHECKING:
     )
     from kairospy.contracts.reference.client import ReferenceClient
     from kairospy.contracts.reference.results import (
-        ReferenceCatalogSnapshot,
+        ReferenceCatalogStatus,
         ReferenceHealthResponse,
         ReferenceRuntimeStatusResponse,
     )
@@ -828,11 +828,11 @@ class ReferenceSystemClient(SystemRpcClient):
     def providers(self) -> dict[str, Any]:
         return self.reader.providers()
 
-    def catalog(self) -> ReferenceCatalogSnapshot:
+    def catalog(self) -> ReferenceCatalogStatus:
         return self.reader.catalog()
 
-    def snapshot(self):
-        return self.reader.snapshot()
+    def read_session(self):
+        return self.reader.read_session()
 
 
 def _capital_control_response(value: CapitalControlResponse) -> dict[str, Any]:

@@ -120,7 +120,10 @@ impl ExecutionSimulator {
     }
 
     fn validate_quote(&self, quote: &Quote) -> Result<(), String> {
-        quote.scope.validate_for(&quote.instrument_id)?;
+        quote
+            .scope
+            .validate_for(&quote.instrument_id)
+            .map_err(|error| error.to_string())?;
         if quote.bid_price.is_none() && quote.ask_price.is_none() {
             return Err("quote must contain bid_price or ask_price".into());
         }

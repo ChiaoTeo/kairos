@@ -296,23 +296,20 @@ pub struct HedgeRequirement {
 }
 
 pub(crate) fn remote_status(value: &str) -> ExecutionOrderStatus {
-    let normalized = value.to_ascii_lowercase();
-    if normalized.contains("partial") && normalized.contains("fill") {
-        ExecutionOrderStatus::PartiallyFilled
-    } else if normalized.contains("fill") {
-        ExecutionOrderStatus::Filled
-    } else if normalized.contains("cancel") {
-        ExecutionOrderStatus::Canceled
-    } else if normalized.contains("reject") {
-        ExecutionOrderStatus::Rejected
-    } else if normalized.contains("expire") {
-        ExecutionOrderStatus::Expired
-    } else if normalized.contains("submit")
-        || normalized.contains("accept")
-        || normalized.contains("acknowledge")
-    {
-        ExecutionOrderStatus::Accepted
-    } else {
-        ExecutionOrderStatus::Unknown
+    let normalized = value
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect::<String>();
+    match normalized.as_str() {
+        "partiallyfilled" | "partialfill" => ExecutionOrderStatus::PartiallyFilled,
+        "filled" | "fill" => ExecutionOrderStatus::Filled,
+        "canceled" | "cancelled" | "cancel" => ExecutionOrderStatus::Canceled,
+        "rejected" | "reject" => ExecutionOrderStatus::Rejected,
+        "expired" | "expire" => ExecutionOrderStatus::Expired,
+        "submitted" | "submit" | "accepted" | "accept" | "acknowledged" | "acknowledge" => {
+            ExecutionOrderStatus::Accepted
+        },
+        _ => ExecutionOrderStatus::Unknown,
     }
 }

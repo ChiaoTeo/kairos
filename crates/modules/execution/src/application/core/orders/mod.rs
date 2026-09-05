@@ -5,13 +5,19 @@ use super::*;
 pub(crate) fn replacement_remaining_quantity(
     requested_total: Quantity,
     filled_quantity: Quantity,
-) -> Result<Quantity, String> {
+) -> Result<Quantity, OrderError> {
     if requested_total <= filled_quantity {
-        return Err("replacement total quantity must exceed the original filled quantity".into());
+        return Err(OrderError::ReplacementTotalNotAboveFilled {
+            requested_total,
+            filled_quantity,
+        });
     }
     requested_total
         .checked_sub(filled_quantity)
-        .map_err(|error| error.to_string())
+        .map_err(|source| OrderError::Arithmetic {
+            operation: "replacement remaining quantity",
+            source,
+        })
 }
 
 pub(crate) struct PreparedCancellation {
@@ -43,7 +49,7 @@ impl ExecutionApplication {
             request.quantity,
             business_time,
         )
-        .map_err(ExecutionError::Invalid)?;
+        .map_err(ExecutionError::Order)?;
         order.intent_id = request.intent_id.clone();
         order.strategy_id = request.strategy_id.clone();
         order.market_id = request.market_id.clone();
@@ -86,7 +92,7 @@ impl ExecutionApplication {
         let transition = self
             .actor
             .record_fill(&request, occurred_at.get(), business_time)
-            .map_err(ExecutionError::Invalid)?;
+            .map_err(ExecutionError::Order)?;
         let (next, fill, event) = match transition {
             crate::services::actor::FillTransition::Duplicate {
                 order,
@@ -138,7 +144,7 @@ impl ExecutionApplication {
                 .map_err(|error| ExecutionError::Invalid(error.to_string()))?;
             self.actor
                 .resize_commitment(next.order_id.as_str(), remaining, business_time)
-                .map_err(ExecutionError::Invalid)?;
+                .map_err(ExecutionError::Order)?;
             self.actor.set_risk_reservation_status(
                 next.order_id.as_str(),
                 RiskReservationSagaStatus::ResizePending,
@@ -198,23 +204,25 @@ impl ExecutionApplication {
                 ExecutionError::Invalid("order submission requires explicit business time".into())
             })?;
         if self.actor.contains_order(request.order_id.as_str()) {
-            return Err(ExecutionError::Invalid("order_id already exists".into()));
+            return Err(ExecutionError::Order(OrderError::DuplicateOrder {
+                order_id: request.order_id.clone(),
+            }));
         }
         let execution_route_id = request.execution_route_id.as_ref().ok_or_else(|| {
-            ExecutionError::Invalid(
-                "execution_route_id is required; provider identity is not inferred".into(),
-            )
+            ExecutionError::Order(OrderError::MissingExecutionRoute {
+                order_id: request.order_id.clone(),
+            })
         })?;
         let route = self
             .execution_routes
             .get(execution_route_id)
             .cloned()
             .ok_or_else(|| {
-                ExecutionError::Invalid(format!(
-                    "execution route is not configured: {execution_route_id}"
-                ))
+                ExecutionError::Order(OrderError::RouteNotConfigured {
+                    route_id: execution_route_id.to_string(),
+                })
             })?;
-        validate_execution_route(&request, &route.candidate).map_err(ExecutionError::Invalid)?;
+        validate_execution_route(&request, &route.candidate).map_err(ExecutionError::Order)?;
         let selected_route = crate::domain::SelectedExecutionRoute {
             route_id: route.candidate.route_id.clone(),
             broker_id: route.candidate.broker_id.clone(),
@@ -230,14 +238,14 @@ impl ExecutionApplication {
             .as_deref()
             .map(parse_time_in_force)
             .transpose()
-            .map_err(ExecutionError::Invalid)?;
+            .map_err(ExecutionError::Order)?;
         self.advance_time(now)?;
         let commitment_observation = self
             .order_admission
             .as_mut()
             .map(|admission| admission.commitment_observation(request.account_id.as_str()))
             .transpose()
-            .map_err(ExecutionError::Invalid)?
+            .map_err(ExecutionError::Admission)?
             .flatten();
         if let Some(observation) = commitment_observation {
             let changed = self.actor.reconcile_account_commitment_observation(
@@ -255,10 +263,10 @@ impl ExecutionApplication {
             if let Some(admission) = self.order_admission.as_mut() {
                 let commitment = admission
                     .validate_order(&request, &active_commitments, now)
-                    .map_err(ExecutionError::Invalid)?;
+                    .map_err(ExecutionError::Admission)?;
                 let risk_context = admission
                     .risk_authorization_context(&request, &route.candidate)
-                    .map_err(ExecutionError::Invalid)?;
+                    .map_err(ExecutionError::Admission)?;
                 (commitment, admission.dependency_watermarks(), risk_context)
             } else if self.live_trading {
                 return Err(ExecutionError::Invalid(
@@ -283,7 +291,7 @@ impl ExecutionApplication {
                 planned_reservation,
                 now,
             )
-            .map_err(ExecutionError::Invalid)?;
+            .map_err(ExecutionError::Order)?;
         // Persist the stable reservation identity and commitment before the
         // Risk command can possibly be sent. Recovery can therefore reconcile
         // an authorization whose response was lost without inventing an ID.
@@ -354,7 +362,7 @@ impl ExecutionApplication {
         let (order, submitting_event) = self
             .actor
             .activate_submission(request.order_id.as_str(), risk_reservation, now)
-            .map_err(ExecutionError::Invalid)?;
+            .map_err(ExecutionError::Order)?;
         self.commit(submitting_event)?;
         let connection_request = to_connection_request(
             &order,
@@ -362,7 +370,7 @@ impl ExecutionApplication {
             &options,
             &self.execution_routes,
         )
-        .map_err(ExecutionError::Invalid)?;
+        .map_err(ExecutionError::Order)?;
         Ok((order, connection_request))
     }
 
@@ -424,7 +432,7 @@ impl ExecutionApplication {
         let (order, persisted_event) = self
             .actor
             .apply_order_entry_event(order_id, event)
-            .map_err(ExecutionError::Invalid)?;
+            .map_err(ExecutionError::Order)?;
         self.update_commitment_from_order(&order, persisted_event.occurred_at_unix_nanos.get())?;
         let risk_effect = match order.status {
             ExecutionOrderStatus::Rejected
@@ -485,7 +493,7 @@ impl ExecutionApplication {
                 reason,
                 source_cursor,
             )
-            .map_err(ExecutionError::Invalid)?;
+            .map_err(ExecutionError::Order)?;
         self.actor
             .set_commitment_status(order_id, CommitmentStatus::Uncertain, applied_at);
         self.actor.set_risk_reservation_status(
@@ -527,7 +535,7 @@ impl ExecutionApplication {
                     .map_err(|error| ExecutionError::Invalid(error.to_string()))?;
                 self.actor
                     .resize_commitment(order.order_id.as_str(), remaining, occurred_at)
-                    .map_err(ExecutionError::Invalid)?;
+                    .map_err(ExecutionError::Order)?;
             },
             _ => self.actor.set_commitment_status(
                 order.order_id.as_str(),
@@ -796,7 +804,7 @@ impl ExecutionApplication {
         let (_, event) = self
             .actor
             .begin_cancel_attempt(order_id, now)
-            .map_err(ExecutionError::Invalid)?;
+            .map_err(ExecutionError::Order)?;
         // Persist an indeterminate cancel attempt before the command can leave
         // the process. A crash after this point must reconcile, not resend.
         self.commit(event)
@@ -812,9 +820,16 @@ impl ExecutionApplication {
             .order_map()
             .get(request.order_id.as_str())
             .cloned()
-            .ok_or_else(|| ExecutionError::Invalid("unknown order".into()))?;
+            .ok_or_else(|| {
+                ExecutionError::Order(OrderError::UnknownOrder {
+                    order_id: request.order_id.to_string(),
+                })
+            })?;
         if order.status.terminal() {
-            return Err(ExecutionError::Invalid("order is terminal".into()));
+            return Err(ExecutionError::Order(OrderError::TerminalOrder {
+                order_id: order.order_id.clone(),
+                status: order.status,
+            }));
         }
         let connection_request = to_connection_request(
             &order,
@@ -822,7 +837,7 @@ impl ExecutionApplication {
             &ExecutionOrderOptions::default(),
             &self.execution_routes,
         )
-        .map_err(ExecutionError::Invalid)?;
+        .map_err(ExecutionError::Order)?;
         let remote_order_id = order
             .remote_order_id
             .as_ref()
@@ -878,7 +893,7 @@ impl ExecutionApplication {
                         crate::domain::DeliveryCertainty::Rejected,
                         self.require_business_time("cancel rejection")?,
                     )
-                    .map_err(ExecutionError::Invalid)?;
+                    .map_err(ExecutionError::Order)?;
                 self.commit(event)?;
                 return Err(ExecutionError::ProviderRejected(rejection.message));
             },
@@ -899,7 +914,7 @@ impl ExecutionApplication {
                         crate::domain::DeliveryCertainty::NotSent,
                         self.require_business_time("cancel failure")?,
                     )
-                    .map_err(ExecutionError::Invalid)?;
+                    .map_err(ExecutionError::Order)?;
                 self.commit(event)?;
                 return Err(ExecutionError::Gateway(error.to_string()));
             },
@@ -913,14 +928,14 @@ impl ExecutionApplication {
         let (provider_order, _) = self
             .actor
             .apply_order_entry_event(order.order_id.as_str(), event)
-            .map_err(ExecutionError::Invalid)?;
+            .map_err(ExecutionError::Order)?;
         self.actor
             .resolve_cancel_attempt(
                 provider_order.order_id.as_str(),
                 crate::domain::DeliveryCertainty::Confirmed,
                 now,
             )
-            .map_err(ExecutionError::Invalid)?;
+            .map_err(ExecutionError::Order)?;
         let (next, persisted_event) = self
             .actor
             .mark_delivery_status(
@@ -1145,7 +1160,7 @@ impl ExecutionApplication {
         };
         self.actor
             .set_pending_quote_refresh(prepared.request.intent_id.as_str(), prepared.clone())
-            .map_err(ExecutionError::Invalid)?;
+            .map_err(ExecutionError::Intent)?;
         // Persist the exact transaction and cancel targets before the first
         // cancel can leave the process. Replacement quantity is deliberately
         // not authorized until every cancel has a determinate outcome.
@@ -1218,11 +1233,11 @@ impl ExecutionApplication {
                     .collect(),
             },
         )
-        .map_err(ExecutionError::Invalid)?;
+        .map_err(ExecutionError::Algorithm)?;
         let actions = self
             .actor
             .apply_algorithm_decision(prepared.request.intent_id.as_str(), decision)
-            .map_err(ExecutionError::Invalid)?;
+            .map_err(ExecutionError::Algorithm)?;
         if actions.len() != prepared.submissions.len() {
             return Err(ExecutionError::Invalid(
                 "passive-limit algorithm did not authorize every replacement leg".into(),
@@ -1235,13 +1250,13 @@ impl ExecutionApplication {
                     submission.clone(),
                     UnixNanos::new(u64::MAX),
                 )
-                .map_err(ExecutionError::Invalid)?;
+                .map_err(ExecutionError::Intent)?;
         }
         prepared.phase = QuoteRefreshPhase::ReplacementAuthorized;
         prepared.replacement_authorized_at_unix_nanos = Some(decision_time);
         self.actor
             .set_pending_quote_refresh(prepared.request.intent_id.as_str(), prepared.clone())
-            .map_err(ExecutionError::Invalid)?;
+            .map_err(ExecutionError::Intent)?;
         // The decision, action identities, and exact post-cancel remaining
         // quantities are durable before any replacement can leave the process.
         self.persist_snapshot()?;
@@ -1266,7 +1281,7 @@ impl ExecutionApplication {
                     submission.clone(),
                     prepared.replacement_dispatch_time(),
                 )
-                .map_err(ExecutionError::Invalid)?;
+                .map_err(ExecutionError::Intent)?;
         }
         self.persist_snapshot()
     }
@@ -1420,7 +1435,7 @@ impl ExecutionApplication {
                         .map(|quote| (intent_id.clone(), quote))
                 })
                 .collect::<Result<Vec<_>, _>>()
-                .map_err(ExecutionError::Invalid)?
+                .map_err(ExecutionError::Admission)?
         };
         let mut requests = Vec::new();
         for (intent_id, quote) in observations {
@@ -1519,9 +1534,7 @@ impl ExecutionApplication {
         &mut self,
         event: &RemoteOrderUpdate,
     ) -> Result<(), ExecutionError> {
-        self.actor
-            .record_unknown_remote_order(event)
-            .map_err(ExecutionError::Invalid)?;
+        self.actor.record_unknown_remote_order(event);
         self.persist_snapshot()
     }
 }
@@ -1529,69 +1542,66 @@ impl ExecutionApplication {
 pub(super) fn validate_execution_route(
     request: &SubmitOrder,
     route: &ExecutionRouteCandidate,
-) -> Result<(), String> {
+) -> Result<(), OrderError> {
     if route
         .account_id
         .as_ref()
         .is_some_and(|account_id| &request.account_id != account_id)
     {
-        return Err(format!(
-            "execution route {} is configured for account {}, not {}",
-            route.route_id,
-            route.account_id.as_ref().expect("constraint checked"),
-            request.account_id
-        ));
+        return Err(OrderError::RouteConstraint {
+            route_id: route.route_id.to_string(),
+            failure: crate::domain::RouteConstraintFailure::Account,
+        });
     }
     if route
         .segment_key
         .as_ref()
         .is_some_and(|segment_key| &request.segment_key != segment_key)
     {
-        return Err(format!(
-            "execution route {} is configured for segment {}, not {}",
-            route.route_id,
-            route.segment_key.as_ref().expect("constraint checked"),
-            request.segment_key
-        ));
+        return Err(OrderError::RouteConstraint {
+            route_id: route.route_id.to_string(),
+            failure: crate::domain::RouteConstraintFailure::Segment,
+        });
     }
     if route
         .instrument_id
         .as_ref()
         .is_some_and(|instrument_id| &request.instrument_id != instrument_id)
     {
-        return Err(format!(
-            "execution route {} is configured for instrument {}, not {}",
-            route.route_id,
-            route.instrument_id.as_ref().expect("constraint checked"),
-            request.instrument_id
-        ));
+        return Err(OrderError::RouteConstraint {
+            route_id: route.route_id.to_string(),
+            failure: crate::domain::RouteConstraintFailure::Instrument,
+        });
     }
     if let (Some(request_market), Some(route_market)) =
         (request.market_id.as_ref(), route.market_id.as_ref())
     {
         if route_market != request_market {
-            return Err(format!(
-                "execution route {} does not target market {}",
-                route.route_id, request_market
-            ));
+            return Err(OrderError::RouteConstraint {
+                route_id: route.route_id.to_string(),
+                failure: crate::domain::RouteConstraintFailure::Market,
+            });
         }
     }
     if !route.supported_order_types.contains(&request.order_type) {
-        return Err(format!(
-            "execution route {} does not support {:?} orders",
-            route.route_id, request.order_type
-        ));
+        return Err(OrderError::RouteConstraint {
+            route_id: route.route_id.to_string(),
+            failure: crate::domain::RouteConstraintFailure::OrderType,
+        });
     }
     for option in used_order_options(&request.options) {
         if !route.supported_options.iter().any(|value| value == option) {
-            return Err(format!(
-                "execution route {} does not support order option {}",
-                route.route_id, option
-            ));
+            return Err(OrderError::RouteConstraint {
+                route_id: route.route_id.to_string(),
+                failure: crate::domain::RouteConstraintFailure::Option(option),
+            });
         }
     }
     if !route.ready {
-        return Err(format!("execution route {} is not ready", route.route_id));
+        return Err(OrderError::RouteConstraint {
+            route_id: route.route_id.to_string(),
+            failure: crate::domain::RouteConstraintFailure::NotReady,
+        });
     }
     Ok(())
 }

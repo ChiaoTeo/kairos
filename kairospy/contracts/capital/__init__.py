@@ -3,6 +3,9 @@
 from importlib import import_module
 from typing import Any
 
+from .events import __all__ as _EVENT_EXPORTS
+
+
 _EXPORTS = {
     "CapitalContractClient": (".types", "CapitalClient"),
     "CapitalClient": (".types", "CapitalClient"),
@@ -12,7 +15,10 @@ _EXPORTS = {
     "CapitalInvalidInputError": (".types", "CapitalInvalidInputError"),
     "CapitalInvalidEventError": (".types", "CapitalInvalidEventError"),
     "CapitalInvalidCurrentViewError": (".types", "CapitalInvalidCurrentViewError"),
-    "CapitalCurrentViewUnavailableError": (".types", "CapitalCurrentViewUnavailableError"),
+    "CapitalCurrentViewUnavailableError": (
+        ".types",
+        "CapitalCurrentViewUnavailableError",
+    ),
     "CapitalControlUnavailableError": (".types", "CapitalControlUnavailableError"),
     "CapitalControlRejectedError": (".types", "CapitalControlRejectedError"),
     "CancelFundingObjectiveRequest": (".types", "CancelFundingObjectiveRequest"),
@@ -22,7 +28,6 @@ _EXPORTS = {
     "QueryCapitalAvailabilityRequest": (".types", "QueryCapitalAvailabilityRequest"),
     "ReconcileCapitalPlanRequest": (".types", "ReconcileCapitalPlanRequest"),
 }
-from .events import __all__ as _EVENT_EXPORTS
 _EXPORTS.update({name: (".events", name) for name in _EVENT_EXPORTS})
 
 

@@ -49,6 +49,7 @@ fn normalize_quote(
     ticks: &[TickTypes],
 ) -> Result<MarketQuote, IntegrationError> {
     let mut quote = MarketQuote {
+        venue: Default::default(),
         symbol: symbol.clone(),
         bid_price: None,
         bid_quantity: None,
@@ -103,6 +104,7 @@ pub(crate) fn apply_tick(
 
 pub(crate) fn empty_quote(symbol: ParticipantSymbol) -> MarketQuote {
     MarketQuote {
+        venue: Default::default(),
         symbol,
         bid_price: None,
         bid_quantity: None,

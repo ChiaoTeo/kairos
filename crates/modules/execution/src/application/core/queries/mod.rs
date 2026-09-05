@@ -8,29 +8,32 @@ impl ExecutionApplication {
     pub(crate) fn simulated_settlement_fact(
         &self,
         fill_id: &FillId,
-    ) -> Result<(ExecutionFill, ExecutionOrder, OrderCommitment), String> {
+    ) -> Result<(ExecutionFill, ExecutionOrder, OrderCommitment), OrderError> {
         let fill = self
             .actor
             .fills()
             .iter()
             .find(|fill| &fill.fill_id == fill_id)
-            .ok_or_else(|| format!("simulated fill is missing from Execution state: {fill_id}"))?
+            .ok_or_else(|| OrderError::MissingFill {
+                fill_id: fill_id.to_string(),
+            })?
             .clone();
         let order = self
             .actor
             .order_map()
             .get(&fill.order_id)
             .cloned()
-            .ok_or_else(|| format!("simulated fill {} has no Execution order", fill.fill_id))?;
+            .ok_or_else(|| OrderError::MissingOrderForFill {
+                fill_id: fill.fill_id.to_string(),
+                order_id: fill.order_id.clone(),
+            })?;
         let commitment = self
             .actor
             .commitment(fill.order_id.as_str())
             .cloned()
-            .ok_or_else(|| {
-                format!(
-                    "simulated fill {} has no durable order commitment",
-                    fill.fill_id
-                )
+            .ok_or_else(|| OrderError::MissingCommitmentForFill {
+                fill_id: fill.fill_id.to_string(),
+                order_id: fill.order_id.clone(),
             })?;
         Ok((fill, order, commitment))
     }

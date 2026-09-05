@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, fields, is_dataclass, replace
 from typing import Any
 
@@ -124,7 +124,7 @@ class CatalogSetupPlanView:
     recommended_option: int | None
     blockers: tuple[str, ...]
     progress: CatalogPreparationProgress | None = None
-    credential_binding: str | None = None
+    connection_id: str | None = None
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, object]) -> CatalogSetupPlanView:
@@ -171,10 +171,10 @@ class CatalogSetupPlanView:
             recommended_option=recommended,
             blockers=blockers,
             progress=progress,
-            credential_binding=_optional_text(value.get("_credential_binding")),
+            connection_id=_optional_text(value.get("_connection_id")),
         )
 
-    def with_credential_binding(self, credential_binding: str) -> CatalogSetupPlanView:
+    def with_connection_id(self, connection_id: str) -> CatalogSetupPlanView:
         selected = self.recommended_option or 0
         options = tuple(
             replace(option, connection_binding_present=True)
@@ -190,7 +190,7 @@ class CatalogSetupPlanView:
                 for blocker in self.blockers
                 if blocker != "missing_connection_binding"
             ),
-            credential_binding=credential_binding,
+            connection_id=connection_id,
         )
 
     def to_mapping(self) -> dict[str, object]:
@@ -224,7 +224,7 @@ class CatalogSetupPlanView:
                 for option in self.options
             ],
             "progress": progress,
-            "_credential_binding": self.credential_binding,
+            "_connection_id": self.connection_id,
         }
 
 
@@ -232,6 +232,21 @@ class CatalogSetupPlanView:
 class InstrumentTradingAccess:
     markets: tuple[Any, ...]
     provider_availability: tuple[Any, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogSearchResult:
+    records: tuple[Any, ...]
+    evidence: Any | None = None
+
+    def __iter__(self) -> Iterator[Any]:
+        return iter(self.records)
+
+    def __len__(self) -> int:
+        return len(self.records)
+
+    def __getitem__(self, index: int) -> Any:
+        return self.records[index]
 
 
 @dataclass(frozen=True, slots=True)
@@ -473,7 +488,7 @@ def prepare_catalog_source(
     state: Any,
     plan: CatalogSetupPlanView,
     *,
-    credential_binding: str | None = None,
+    connection_id: str | None = None,
 ) -> dict[str, Any]:
     """Apply the selected Reference source and advance its first preparation tick."""
 
@@ -484,7 +499,7 @@ def prepare_catalog_source(
     if selected >= len(options):
         raise RuntimeError("当前没有可用于准备该目录的数据来源")
     option = options[selected]
-    if option.requires_connection and not credential_binding:
+    if option.requires_connection and not connection_id:
         raise RuntimeError("请先配置所需的数据服务账号")
 
     owner = state.owner
@@ -498,7 +513,7 @@ def prepare_catalog_source(
             "binding": option.binding.to_request(),
             "scope": {"kind": "global"},
             "desired_state": "enabled",
-            "credential_binding": credential_binding,
+            "connection_id": connection_id,
         }
     )
     source_id = str(configured.get("source_id") or "")
@@ -562,22 +577,14 @@ def catalog_setup_renderable(
             "实际准备范围",
             {
                 "requested_exchange": "所选交易所",
-                "complete_united_states_equities": "完整美国股票目录",
-                "provider_catalog": "该服务商提供的完整目录",
+                "provider_catalog": "该服务商的产品目录",
                 "selected_underlyings": "选中的期权标的",
             }.get(scope, scope or "—"),
         )
-        if "synchronizes_complete_united_states_equities" in (
-            option.get("limitations") or ()
-        ):
-            table.add_row(
-                "范围说明",
-                "该来源按完整美国股票目录同步，不能只同步一个交易所。",
-            )
         if "product_is_provider_specific" in (option.get("limitations") or ()):
             table.add_row(
                 "目录含义",
-                "这是服务商可交易目录，不代表该服务商是标的的上市交易所。",
+                "这是服务商产品目录，不代表完整美国股票或交易所上市目录。",
             )
         if option.get("requires_connection") is True:
             table.add_row(
@@ -743,20 +750,20 @@ def detail_actions(kind: str | None) -> tuple[ActionItem, ...]:
     if kind in {"instruments", "option-chain", "trading-access"}:
         return (
             ActionItem("summary", "概览", "查看品种类型、状态和到期信息", "1"),
-            ActionItem("listings", "上市信息", "查看交易所上市记录", "2"),
+            ActionItem("listings", "上市信息", "查看正式上市场所与上市代码", "2"),
             ActionItem(
                 "markets",
                 "在哪里可以交易",
-                "区分交易所上市市场与服务商可交易渠道",
+                "区分上市场所、实际成交场所与服务商目录覆盖",
                 "3",
             ),
             ActionItem("technical", "技术标识", "显示完整交易品种标识", "4"),
         )
     if kind == "exchanges":
         return (
-            ActionItem("summary", "概览", "查看交易所名称与状态", "1"),
-            ActionItem("related", "上市信息或市场", "查看交易所上市记录", "2"),
-            ActionItem("technical", "技术标识", "显示完整交易所标识", "3"),
+            ActionItem("summary", "概览", "查看场所类型、角色与状态", "1"),
+            ActionItem("related", "上市信息", "查看该场所承载的上市记录", "2"),
+            ActionItem("technical", "技术标识", "显示完整场所标识与 MIC", "3"),
         )
     if kind == "markets":
         return (
@@ -772,38 +779,52 @@ def load_records(
     query: str,
     *,
     instrument_type: str | None = None,
-) -> tuple[Any, ...]:
+) -> CatalogSearchResult:
     application = _application(state)
+    evidence: Any | None = None
     if kind == "assets":
         records = application.find_assets(
             query=query or None, active_only=True, limit=25
         )
     elif kind == "exchanges":
-        records = application.find_exchanges(
+        result = application.find_venues(
             query=query or None, active_only=True, limit=25
         )
+        records = tuple(result.venues)
+        evidence = result.evidence
     elif kind == "instruments":
-        records = application.find_instruments(
+        result = application.search_instruments(
             query=query or None,
             instrument_type=instrument_type,
             active_only=True,
             limit=25,
         )
+        records = tuple(result.instruments)
+        evidence = result.evidence
     elif kind == "trading-access":
-        records = application.find_instruments(
+        result = application.search_instruments(
             query=query or None,
             active_only=True,
             limit=25,
         )
+        records = tuple(result.instruments)
+        evidence = result.evidence
     elif kind == "markets":
-        records = _market_search_records(application, query)
+        result = application.find_venue_markets(
+            query=query or None, active_only=True, limit=25
+        )
+        records = tuple(result.markets)
+        evidence = result.evidence
     elif kind == "option-chain":
         if not query:
             raise ValueError("请输入标的合约 ID。")
         records = application.option_chain(query, active_only=True, limit=100)
     else:
         raise RuntimeError(f"unknown reference kind: {kind}")
-    return rank_records(record_kind(kind), tuple(records), query or None)[:25]
+    return CatalogSearchResult(
+        rank_records(record_kind(kind), tuple(records), query or None)[:25],
+        evidence,
+    )
 
 
 def catalog_not_initialized(error: str) -> bool:
@@ -818,39 +839,6 @@ def catalog_not_initialized(error: str) -> bool:
     )
 
 
-def _market_search_records(application: Any, query: str) -> tuple[Any, ...]:
-    """Resolve user text through markets, instruments, and assets."""
-
-    markets = list(
-        application.find_markets(query=query or None, active_only=True, limit=50)
-    )
-    if query and not markets:
-        instruments = application.find_instruments(
-            query=query, active_only=True, limit=25
-        )
-        for instrument in instruments:
-            markets.extend(
-                application.find_markets(
-                    instrument_id=instrument.id,
-                    active_only=True,
-                    limit=25,
-                )
-            )
-        assets = application.find_assets(query=query, active_only=True, limit=25)
-        for asset in assets:
-            markets.extend(
-                application.find_markets(
-                    asset_code=str(asset.code),
-                    active_only=True,
-                    limit=50,
-                )
-            )
-    unique: dict[str, Any] = {}
-    for market in markets:
-        unique.setdefault(str(market.id), market)
-    return tuple(unique.values())
-
-
 def load_related(state: Any, kind: str, record: Any) -> tuple[str, tuple[Any, ...]]:
     application = _application(state)
     if kind == "assets":
@@ -863,14 +851,16 @@ def load_related(state: Any, kind: str, record: Any) -> tuple[str, tuple[Any, ..
     if kind in {"instruments", "option-chain", "trading-access"}:
         return (
             "listings",
-            application.find_listings(
+            tuple(application.find_venue_listings(
                 instrument_id=record.id, active_only=True, limit=10
-            ),
+            ).listings),
         )
     if kind == "exchanges":
         return (
             "listings",
-            application.find_listings(exchange=record.id, active_only=True, limit=10),
+            tuple(application.find_venue_listings(
+                listing_venue_id=str(record.id), active_only=True, limit=10
+            ).listings),
         )
     raise ValueError("当前记录没有该关联查询。")
 
@@ -881,10 +871,10 @@ def load_instrument_markets(state: Any, record: Any) -> tuple[str, tuple[Any, ..
         "instrument-access",
         (
             InstrumentTradingAccess(
-                markets=application.find_markets(
+                markets=tuple(application.find_venue_markets(
                     instrument_id=record.id, active_only=True, limit=20
-                ),
-                provider_availability=application.find_instrument_availability(
+                ).markets),
+                provider_availability=application.find_provider_catalog_memberships(
                     instrument_ids=(record.id,), active_only=True, limit=20
                 ),
             ),
@@ -907,8 +897,17 @@ def detail_renderable(
         )
         technical_rows = (("资产标识", record.id),)
     elif kind == "exchanges":
-        rows = (("名称", record.name), ("状态", _status_label(record.status)))
-        technical_rows = (("交易所标识", record.id),)
+        rows = (
+            ("名称", record.name),
+            ("场所类型", _venue_kind_label(record.venue_kind)),
+            ("角色", "、".join(_venue_role_label(role) for role in record.roles)),
+            ("状态", _status_label(record.status)),
+        )
+        technical_rows = (
+            ("场所标识", record.id),
+            ("MIC", record.mic or "—"),
+            ("Operating MIC", record.operating_mic or "—"),
+        )
     elif kind in {"instruments", "option-chain"}:
         rows = (
             ("代码", record.symbol),
@@ -925,17 +924,16 @@ def detail_renderable(
         )
     elif kind == "markets":
         rows = (
-            ("代码", record.venue_symbol or record.instrument.display_symbol),
-            ("交易所", _exchange_label(record.exchange_id)),
-            ("市场类型", _instrument_kind_label(record.instrument_kind)),
-            ("基础资产", _short_id(record.base_asset)),
-            ("计价资产", _short_id(record.quote_asset)),
+            ("场所代码", record.venue_symbol or _short_id(record.instrument_id)),
+            ("成交场所", _exchange_label(record.execution_venue_id)),
+            ("基础资产", _short_id(record.base_asset_id)),
+            ("计价资产", _short_id(record.quote_asset_id)),
             ("状态", _status_label(record.status)),
         )
         technical_rows = (
             ("市场标识", record.id),
-            ("交易品种标识", record.instrument.id),
-            ("上市关系标识", record.listing_id or "—"),
+            ("交易品种标识", record.instrument_id),
+            ("来源上市关系", record.origin_listing_id or "—"),
         )
     else:
         return Panel(Pretty(_as_value(record), expand_all=True), title="标的目录")
@@ -953,7 +951,7 @@ def records_renderable(kind: str, records: tuple[Any, ...]) -> RenderableType:
         return _instrument_access_renderable(records[0])
     titles = {
         "assets": "资产",
-        "exchanges": "交易所",
+        "exchanges": "交易场所",
         "instruments": "交易品种",
         "trading-access": "交易品种",
         "markets": "交易标的",
@@ -990,8 +988,8 @@ def _instrument_access_renderable(value: InstrumentTradingAccess) -> RenderableT
     if value.markets:
         for market in value.markets:
             markets.add_row(
-                _exchange_label(market.exchange_id),
-                str(market.venue_symbol or market.instrument.display_symbol),
+                _exchange_label(market.execution_venue_id),
+                str(market.venue_symbol or market.instrument_id),
                 str(market.status),
             )
     else:
@@ -1006,14 +1004,14 @@ def _instrument_access_renderable(value: InstrumentTradingAccess) -> RenderableT
             providers.add_row(
                 _availability_provider_label(str(availability.source_id)),
                 _source_label(str(availability.source_id)),
-                _status_label(availability.instrument.status),
+                _status_label(availability.status),
             )
     else:
         providers.add_row("—", "没有已同步的服务商可用性", "—")
     return Group(
-        conclusion("已分别核对交易所市场与服务商渠道"),
-        section("交易所上市与市场", markets),
-        section("服务商可交易渠道", providers),
+        conclusion("已分别核对成交场所与服务商目录覆盖"),
+        section("实际成交场所", markets),
+        section("服务商目录覆盖", providers),
         Text(
             "服务商提供某只股票，不代表该服务商就是这只股票的上市交易所。",
             style="dim",
@@ -1157,6 +1155,28 @@ def _instrument_kind_label(value: object) -> str:
         "index": "指数",
         "unknown": "未知品种",
     }.get(str(value or "unknown").lower(), str(value or "未知品种"))
+
+
+def _venue_kind_label(value: object) -> str:
+    return {
+        "regulated_exchange": "受监管交易所",
+        "regulated_market": "受监管市场",
+        "trading_platform": "交易平台",
+        "ats": "另类交易系统",
+        "pts": "私设交易系统",
+        "otc_facility": "场外交易设施",
+        "dealer": "交易商",
+        "trade_reporting_facility": "交易报告设施",
+        "unknown": "未知场所类型",
+    }.get(str(value or "unknown").lower(), str(value or "未知场所类型"))
+
+
+def _venue_role_label(value: object) -> str:
+    return {
+        "listing": "上市",
+        "execution": "成交",
+        "reporting": "报告",
+    }.get(str(value or "").lower(), str(value or "未知"))
 
 
 def _asset_class_label(value: object) -> str:
@@ -1308,7 +1328,10 @@ def _search_values(kind: str, record: Any) -> tuple[str, ...]:
         return str(record.symbol), str(record.name or ""), str(record.id)
     return (
         str(record.venue_symbol or ""),
-        str(record.instrument.display_symbol),
+        str(
+            getattr(record, "instrument_id", None)
+            or getattr(getattr(record, "instrument", None), "display_symbol", "")
+        ),
         str(record.id),
     )
 
@@ -1320,6 +1343,13 @@ def _short_id(value: Any) -> str:
 def _exchange_label(value: Any) -> str:
     exchange_id = str(value or "")
     return {
+        "venue:xnas": "Nasdaq Stock Market",
+        "venue:xnys": "New York Stock Exchange",
+        "venue:arcx": "NYSE Arca",
+        "venue:iexg": "Investors Exchange",
+        "venue:binance": "币安",
+        "venue:okx": "OKX",
+        "venue:hyperliquid": "Hyperliquid",
         "exchange:nasdaq": "纳斯达克",
         "exchange:nyse": "纽约证券交易所",
         "exchange:amex": "美国证券交易所",

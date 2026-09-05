@@ -6,15 +6,19 @@ use _native_transport::lease::{EventLease, EventLeaseError};
 use kairos_primitives::reference::ReferenceStatus;
 use kairos_primitives::time::UnixNanos;
 use kairos_protocol::generated::kairos::common::v_2::Decimal64;
-use kairos_protocol::generated::kairos::reference::v_2 as fb;
+use kairos_protocol::generated::kairos::reference::{v_2 as fb, v_3 as fb3};
 use kairos_protocol::{EventMetadataOwned, decode_event_metadata};
 use kairos_reference_contract::{
     Asset as RustAsset, AssetCatalogQuery, ContractError, Exchange as RustExchange,
     ExchangeCatalogQuery, Instrument as RustInstrument, InstrumentAvailabilityQuery,
     InstrumentSearchQuery, Listing as RustListing, ListingCatalogQuery, Market as RustMarket,
-    MarketSearchQuery, ReferenceCatalog as RustCatalog,
+    MarketResolutionQuery, MarketSearchQuery, ProviderCatalogMembershipQuery,
+    ReferenceCatalog as RustCatalog, ReferenceCoverageEvidence as RustCoverageEvidence,
     ReferenceInstrumentAvailability as RustInstrumentAvailability,
-    ReferenceLifecycleEvent as RustEvent, ReferencePage, ReferenceReadSession as RustSession,
+    ReferenceLifecycleEvent as RustEvent, ReferencePage,
+    ReferenceQueryEvidence as RustQueryEvidence, ReferenceReadSession as RustSession,
+    Venue as RustVenue, VenueKind, VenueListing as RustVenueListing, VenueListingSearchQuery,
+    VenueMarket as RustVenueMarket, VenueMarketSearchQuery, VenueRole, VenueSearchQuery,
 };
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -343,6 +347,8 @@ struct ReferenceInstrument {
     #[pyo3(get)]
     primary_currency_asset_id: Option<String>,
     #[pyo3(get)]
+    settlement_asset_id: Option<String>,
+    #[pyo3(get)]
     underlying_instrument_id: Option<String>,
     #[pyo3(get)]
     expiry_unix_nanos: Option<u64>,
@@ -466,6 +472,186 @@ struct ReferenceMarket {
     effective_to_unix_nanos: Option<u64>,
 }
 
+#[pyclass(frozen, module = "kairospy._native_reference_contract")]
+#[derive(Clone)]
+struct ReferenceVenue {
+    #[pyo3(get)]
+    venue_id: String,
+    #[pyo3(get)]
+    name: String,
+    #[pyo3(get)]
+    venue_kind: String,
+    #[pyo3(get)]
+    roles: Vec<String>,
+    #[pyo3(get)]
+    mic: Option<String>,
+    #[pyo3(get)]
+    operating_mic: Option<String>,
+    #[pyo3(get)]
+    parent_venue_id: Option<String>,
+    #[pyo3(get)]
+    jurisdiction: Option<String>,
+    #[pyo3(get)]
+    status: String,
+}
+
+#[pymethods]
+impl ReferenceVenue {
+    #[getter]
+    fn id(&self) -> &str {
+        &self.venue_id
+    }
+}
+
+#[pyclass(frozen, module = "kairospy._native_reference_contract")]
+#[derive(Clone)]
+struct ReferenceVenueListing {
+    #[pyo3(get)]
+    listing_id: String,
+    #[pyo3(get)]
+    instrument_id: String,
+    #[pyo3(get)]
+    listing_venue_id: String,
+    #[pyo3(get)]
+    market_segment_id: Option<String>,
+    #[pyo3(get)]
+    listing_symbol: String,
+    #[pyo3(get)]
+    listing_role: String,
+    #[pyo3(get)]
+    status: String,
+    #[pyo3(get)]
+    effective_from_unix_nanos: u64,
+    #[pyo3(get)]
+    effective_to_unix_nanos: Option<u64>,
+}
+
+#[pyclass(frozen, module = "kairospy._native_reference_contract")]
+#[derive(Clone)]
+struct ReferenceVenueMarket {
+    #[pyo3(get)]
+    market_id: String,
+    #[pyo3(get)]
+    instrument_id: String,
+    #[pyo3(get)]
+    execution_venue_id: String,
+    #[pyo3(get)]
+    origin_listing_id: Option<String>,
+    #[pyo3(get)]
+    market_segment_id: Option<String>,
+    #[pyo3(get)]
+    venue_symbol: Option<String>,
+    #[pyo3(get)]
+    trading_calendar_id: Option<String>,
+    #[pyo3(get)]
+    trading_session_ids: Vec<String>,
+    #[pyo3(get)]
+    base_asset_id: Option<String>,
+    #[pyo3(get)]
+    quote_asset_id: Option<String>,
+    #[pyo3(get)]
+    status: String,
+    #[pyo3(get)]
+    trading_rules: ReferenceTradingRules,
+    #[pyo3(get)]
+    effective_from_unix_nanos: u64,
+    #[pyo3(get)]
+    effective_to_unix_nanos: Option<u64>,
+}
+
+#[pymethods]
+impl ReferenceVenueMarket {
+    #[getter]
+    fn id(&self) -> &str {
+        &self.market_id
+    }
+}
+
+#[pyclass(frozen, module = "kairospy._native_reference_contract")]
+#[derive(Clone)]
+struct ReferenceProviderCatalogMembership {
+    #[pyo3(get)]
+    source_id: String,
+    #[pyo3(get)]
+    instrument_id: String,
+    #[pyo3(get)]
+    provider_symbol: Option<String>,
+    #[pyo3(get)]
+    provider_product: Option<String>,
+    #[pyo3(get)]
+    status: String,
+    #[pyo3(get)]
+    effective_from_unix_nanos: u64,
+    #[pyo3(get)]
+    effective_to_unix_nanos: Option<u64>,
+}
+
+#[pyclass(frozen, module = "kairospy._native_reference_contract")]
+#[derive(Clone)]
+struct ReferenceCoverage {
+    #[pyo3(get)]
+    coverage_id: String,
+    #[pyo3(get)]
+    source_id: String,
+    #[pyo3(get)]
+    fact_kinds: Vec<String>,
+    #[pyo3(get)]
+    scope_kind: String,
+    #[pyo3(get)]
+    scope_binding: Option<String>,
+    #[pyo3(get)]
+    scope_ids: Vec<String>,
+    #[pyo3(get)]
+    scope_instrument_kind: Option<String>,
+    #[pyo3(get)]
+    completeness: String,
+    #[pyo3(get)]
+    state: String,
+    #[pyo3(get)]
+    generation: u64,
+    #[pyo3(get)]
+    event_sequence: u64,
+    #[pyo3(get)]
+    last_attempt_unix_nanos: Option<u64>,
+    #[pyo3(get)]
+    last_success_unix_nanos: Option<u64>,
+    #[pyo3(get)]
+    stale_after_unix_nanos: Option<u64>,
+    #[pyo3(get)]
+    has_last_known_good: bool,
+}
+
+#[pyclass(frozen, module = "kairospy._native_reference_contract")]
+struct ReferenceCoverageStateChange {
+    #[pyo3(get)]
+    coverage: ReferenceCoverage,
+    #[pyo3(get)]
+    previous_state: String,
+}
+
+#[pyclass(frozen, module = "kairospy._native_reference_contract")]
+#[derive(Clone)]
+struct ReferenceMarketResolutionRecord {
+    #[pyo3(get)]
+    instrument: ReferenceInstrument,
+    #[pyo3(get)]
+    market: ReferenceVenueMarket,
+    #[pyo3(get)]
+    venue: ReferenceVenue,
+    #[pyo3(get)]
+    origin_listing: Option<ReferenceVenueListing>,
+}
+
+#[pyclass(frozen, module = "kairospy._native_reference_contract")]
+struct ReferenceMarketResolutionResponse {
+    #[pyo3(get)]
+    resolution: Option<ReferenceMarketResolutionRecord>,
+    #[pyo3(get)]
+    candidate_count: u64,
+    #[pyo3(get)]
+    evidence: ReferenceQueryEvidence,
+}
+
 #[pymethods]
 impl ReferenceMarket {
     #[getter]
@@ -580,6 +766,80 @@ struct ReferenceCatalogStatus {
     option_markets: u64,
 }
 
+#[pyclass(frozen, module = "kairospy._native_reference_contract")]
+#[derive(Clone)]
+struct ReferenceCoverageEvidence {
+    #[pyo3(get)]
+    coverage_id: String,
+    #[pyo3(get)]
+    source_id: String,
+    #[pyo3(get)]
+    scope: String,
+    #[pyo3(get)]
+    completeness: String,
+    #[pyo3(get)]
+    state: String,
+    #[pyo3(get)]
+    last_success_unix_nanos: Option<u64>,
+}
+
+#[pyclass(frozen, module = "kairospy._native_reference_contract")]
+#[derive(Clone)]
+struct ReferenceQueryEvidence {
+    #[pyo3(get)]
+    generation: u64,
+    #[pyo3(get)]
+    event_sequence: u64,
+    #[pyo3(get)]
+    committed_at_unix_nanos: u64,
+    #[pyo3(get)]
+    conclusion: String,
+    #[pyo3(get)]
+    coverages: Vec<ReferenceCoverageEvidence>,
+}
+
+#[pyclass(frozen, module = "kairospy._native_reference_contract")]
+struct ReferenceInstrumentSearchResponse {
+    #[pyo3(get)]
+    instruments: Vec<ReferenceInstrument>,
+    #[pyo3(get)]
+    evidence: ReferenceQueryEvidence,
+    #[pyo3(get)]
+    next_cursor: Option<String>,
+}
+
+#[pyclass(frozen, module = "kairospy._native_reference_contract")]
+struct ReferenceVenueSearchResponse {
+    #[pyo3(get)]
+    venues: Vec<ReferenceVenue>,
+    #[pyo3(get)]
+    evidence: ReferenceQueryEvidence,
+    #[pyo3(get)]
+    next_cursor: Option<String>,
+}
+
+#[pyclass(frozen, module = "kairospy._native_reference_contract")]
+struct ReferenceVenueListingSearchResponse {
+    #[pyo3(get)]
+    listings: Vec<ReferenceVenueListing>,
+    #[pyo3(get)]
+    evidence: ReferenceQueryEvidence,
+    #[pyo3(get)]
+    next_cursor: Option<String>,
+}
+
+#[pyclass(frozen, module = "kairospy._native_reference_contract")]
+struct ReferenceVenueMarketSearchResponse {
+    #[pyo3(get)]
+    markets: Vec<ReferenceVenueMarket>,
+    #[pyo3(get)]
+    instruments: Vec<ReferenceInstrument>,
+    #[pyo3(get)]
+    evidence: ReferenceQueryEvidence,
+    #[pyo3(get)]
+    next_cursor: Option<String>,
+}
+
 #[pyclass(module = "kairospy._native_reference_contract")]
 struct ReferenceCatalog {
     inner: RustCatalog,
@@ -594,7 +854,7 @@ impl ReferenceCatalog {
         })
     }
 
-    fn snapshot(&self) -> PyResult<ReferenceReadSession> {
+    fn read_session(&self) -> PyResult<ReferenceReadSession> {
         let inner = self.inner.read_session().map_err(contract_error)?;
         let watermark = inner.watermark();
         Ok(ReferenceReadSession {
@@ -735,9 +995,188 @@ impl ReferenceReadSession {
                 option_right,
                 status: reference_status(status)?,
                 active_only,
+                coverage_scope: None,
                 page: page(limit, offset)?,
             })
             .map(|values| values.into_iter().map(Into::into).collect())
+            .map_err(contract_error)
+    }
+
+    #[pyo3(signature = (query=None, instrument_type=None, active_only=true, limit=25, offset=0))]
+    fn search_instruments(
+        &self,
+        query: Option<String>,
+        instrument_type: Option<String>,
+        active_only: bool,
+        limit: i64,
+        offset: i64,
+    ) -> PyResult<ReferenceInstrumentSearchResponse> {
+        self.session()?
+            .search_instruments(&InstrumentSearchQuery {
+                search: query,
+                instrument_type: parsed_value(instrument_type, "instrument_type")?,
+                active_only,
+                coverage_scope: None,
+                page: page(Some(limit), offset)?,
+                ..Default::default()
+            })
+            .map(|response| ReferenceInstrumentSearchResponse {
+                instruments: response.instruments.into_iter().map(Into::into).collect(),
+                evidence: response.evidence.into(),
+                next_cursor: response.next_cursor,
+            })
+            .map_err(contract_error)
+    }
+
+    #[pyo3(signature = (query=None, venue_kind=None, role=None, active_only=true, limit=25, offset=0))]
+    fn search_venues(
+        &self,
+        query: Option<String>,
+        venue_kind: Option<String>,
+        role: Option<String>,
+        active_only: bool,
+        limit: i64,
+        offset: i64,
+    ) -> PyResult<ReferenceVenueSearchResponse> {
+        self.session()?
+            .search_venues(&VenueSearchQuery {
+                search: query,
+                venue_kind: parse_venue_kind(venue_kind)?,
+                role: parse_venue_role(role)?,
+                active_only,
+                page: page(Some(limit), offset)?,
+                ..Default::default()
+            })
+            .map(|response| ReferenceVenueSearchResponse {
+                venues: response.venues.into_iter().map(Into::into).collect(),
+                evidence: response.evidence.into(),
+                next_cursor: response.next_cursor,
+            })
+            .map_err(contract_error)
+    }
+
+    #[pyo3(signature = (query=None, instrument_id=None, listing_venue_id=None, active_only=true, limit=25, offset=0))]
+    fn search_venue_listings(
+        &self,
+        query: Option<String>,
+        instrument_id: Option<String>,
+        listing_venue_id: Option<String>,
+        active_only: bool,
+        limit: i64,
+        offset: i64,
+    ) -> PyResult<ReferenceVenueListingSearchResponse> {
+        self.session()?
+            .search_venue_listings(&VenueListingSearchQuery {
+                search: query,
+                instrument_id: validated_value(instrument_id, "instrument_id")?,
+                listing_venue_id: validated_value(listing_venue_id, "listing_venue_id")?,
+                active_only,
+                page: page(Some(limit), offset)?,
+                ..Default::default()
+            })
+            .map(|response| ReferenceVenueListingSearchResponse {
+                listings: response.listings.into_iter().map(Into::into).collect(),
+                evidence: response.evidence.into(),
+                next_cursor: response.next_cursor,
+            })
+            .map_err(contract_error)
+    }
+
+    #[pyo3(signature = (query=None, instrument_id=None, execution_venue_id=None, origin_listing_id=None, instrument_kind=None, active_only=true, limit=25, offset=0))]
+    #[allow(clippy::too_many_arguments)]
+    fn search_venue_markets(
+        &self,
+        query: Option<String>,
+        instrument_id: Option<String>,
+        execution_venue_id: Option<String>,
+        origin_listing_id: Option<String>,
+        instrument_kind: Option<String>,
+        active_only: bool,
+        limit: i64,
+        offset: i64,
+    ) -> PyResult<ReferenceVenueMarketSearchResponse> {
+        self.session()?
+            .search_venue_markets(&VenueMarketSearchQuery {
+                search: query,
+                instrument_id: validated_value(instrument_id, "instrument_id")?,
+                execution_venue_id: validated_value(execution_venue_id, "execution_venue_id")?,
+                origin_listing_id: validated_value(origin_listing_id, "origin_listing_id")?,
+                instrument_kind: parsed_value(instrument_kind, "instrument_kind")?,
+                active_only,
+                page: page(Some(limit), offset)?,
+                ..Default::default()
+            })
+            .map(|response| ReferenceVenueMarketSearchResponse {
+                markets: response.markets.into_iter().map(Into::into).collect(),
+                instruments: response.instruments.into_values().map(Into::into).collect(),
+                evidence: response.evidence.into(),
+                next_cursor: response.next_cursor,
+            })
+            .map_err(contract_error)
+    }
+
+    #[pyo3(signature = (source_ids=None, instrument_ids=None, active_only=true, limit=256, offset=0))]
+    fn provider_catalog_memberships(
+        &self,
+        source_ids: Option<Vec<String>>,
+        instrument_ids: Option<Vec<String>>,
+        active_only: bool,
+        limit: i64,
+        offset: i64,
+    ) -> PyResult<Vec<ReferenceProviderCatalogMembership>> {
+        self.session()?
+            .provider_catalog_memberships(&ProviderCatalogMembershipQuery {
+                source_ids: validated_values(source_ids, "source_id")?,
+                instrument_ids: validated_values(instrument_ids, "instrument_id")?,
+                active_only,
+                page: page(Some(limit), offset)?,
+                ..Default::default()
+            })
+            .map(|values| {
+                values
+                    .into_iter()
+                    .map(|value| ReferenceProviderCatalogMembership {
+                        source_id: value.source_id.to_string(),
+                        instrument_id: value.instrument_id.to_string(),
+                        provider_symbol: value.provider_symbol.map(|item| item.to_string()),
+                        provider_product: value.provider_product,
+                        status: value.status.to_string(),
+                        effective_from_unix_nanos: value.effective_from_unix_nanos.get(),
+                        effective_to_unix_nanos: value.effective_to_unix_nanos.map(UnixNanos::get),
+                    })
+                    .collect()
+            })
+            .map_err(contract_error)
+    }
+
+    #[pyo3(signature = (*, market_id=None, instrument_id=None, execution_venue_id=None, active_only=true))]
+    fn resolve_market(
+        &self,
+        market_id: Option<String>,
+        instrument_id: Option<String>,
+        execution_venue_id: Option<String>,
+        active_only: bool,
+    ) -> PyResult<ReferenceMarketResolutionResponse> {
+        self.session()?
+            .resolve_market(&MarketResolutionQuery {
+                market_id: validated_value(market_id, "market_id")?,
+                instrument_id: validated_value(instrument_id, "instrument_id")?,
+                execution_venue_id: validated_value(execution_venue_id, "execution_venue_id")?,
+                active_only,
+                coverage_scope: None,
+            })
+            .map(|response| ReferenceMarketResolutionResponse {
+                resolution: response
+                    .resolution
+                    .map(|value| ReferenceMarketResolutionRecord {
+                        instrument: value.instrument.into(),
+                        market: value.market.into(),
+                        venue: value.venue.into(),
+                        origin_listing: value.origin_listing.map(Into::into),
+                    }),
+                candidate_count: response.candidate_count,
+                evidence: response.evidence.into(),
+            })
             .map_err(contract_error)
     }
 
@@ -860,6 +1299,107 @@ impl ReferenceReadSession {
     }
 }
 
+impl From<RustCoverageEvidence> for ReferenceCoverageEvidence {
+    fn from(value: RustCoverageEvidence) -> Self {
+        Self {
+            coverage_id: value.coverage_id.to_string(),
+            source_id: value.source_id.to_string(),
+            scope: coverage_scope_label(&value.scope),
+            completeness: match value.completeness {
+                kairos_reference_contract::CoverageCompleteness::Unknown => "unknown",
+                kairos_reference_contract::CoverageCompleteness::Partial => "partial",
+                kairos_reference_contract::CoverageCompleteness::CompleteForDeclaredScope => {
+                    "complete_for_declared_scope"
+                },
+            }
+            .to_owned(),
+            state: match value.state {
+                kairos_reference_contract::CoverageState::NotConfigured => "not_configured",
+                kairos_reference_contract::CoverageState::Waiting => "waiting",
+                kairos_reference_contract::CoverageState::Scanning => "scanning",
+                kairos_reference_contract::CoverageState::Promoting => "promoting",
+                kairos_reference_contract::CoverageState::Usable => "usable",
+                kairos_reference_contract::CoverageState::Stale => "stale",
+                kairos_reference_contract::CoverageState::RetryWaiting => "retry_waiting",
+                kairos_reference_contract::CoverageState::Paused => "paused",
+                kairos_reference_contract::CoverageState::Unavailable => "unavailable",
+            }
+            .to_owned(),
+            last_success_unix_nanos: value.last_success_unix_nanos.map(UnixNanos::get),
+        }
+    }
+}
+
+impl From<RustQueryEvidence> for ReferenceQueryEvidence {
+    fn from(value: RustQueryEvidence) -> Self {
+        Self {
+            generation: value.watermark.generation.get(),
+            event_sequence: value.watermark.event_sequence.get(),
+            committed_at_unix_nanos: value.watermark.committed_at_unix_nanos.get(),
+            conclusion: match value.conclusion {
+                kairos_reference_contract::ReferenceKnowledgeConclusion::Found => "found",
+                kairos_reference_contract::ReferenceKnowledgeConclusion::NotFoundInCoveredScope => {
+                    "not_found_in_covered_scope"
+                },
+                kairos_reference_contract::ReferenceKnowledgeConclusion::UnknownOutsideCoverage => {
+                    "unknown_outside_coverage"
+                },
+                kairos_reference_contract::ReferenceKnowledgeConclusion::Preparing => "preparing",
+                kairos_reference_contract::ReferenceKnowledgeConclusion::KnownButStale => {
+                    "known_but_stale"
+                },
+                kairos_reference_contract::ReferenceKnowledgeConclusion::SourceUnavailable => {
+                    "source_unavailable"
+                },
+            }
+            .to_owned(),
+            coverages: value.coverages.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+fn coverage_scope_label(scope: &kairos_reference_contract::ReferenceCoverageScope) -> String {
+    match scope {
+        kairos_reference_contract::ReferenceCoverageScope::ProviderCatalog { binding } => {
+            format!("provider_catalog:{}", binding.source_id())
+        },
+        kairos_reference_contract::ReferenceCoverageScope::VenueListings {
+            venue_ids,
+            instrument_kind,
+        } => format!(
+            "venue_listings:{}:{}",
+            venue_ids
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(","),
+            instrument_kind.as_str()
+        ),
+        kairos_reference_contract::ReferenceCoverageScope::VenueMarkets {
+            venue_ids,
+            instrument_kind,
+        } => format!(
+            "venue_markets:{}:{}",
+            venue_ids
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(","),
+            instrument_kind.as_str()
+        ),
+        kairos_reference_contract::ReferenceCoverageScope::UnderlyingOptions {
+            underlying_instrument_ids,
+        } => format!(
+            "underlying_options:{}",
+            underlying_instrument_ids
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+    }
+}
+
 fn page(limit: Option<i64>, offset: i64) -> PyResult<ReferencePage> {
     Ok(ReferencePage {
         limit: optional_non_negative(limit, "limit")?,
@@ -941,6 +1481,38 @@ fn reference_status(value: Option<String>) -> PyResult<Option<ReferenceStatus>> 
         .transpose()
 }
 
+fn parse_venue_kind(value: Option<String>) -> PyResult<Option<VenueKind>> {
+    value
+        .map(|value| match value.trim().to_ascii_lowercase().as_str() {
+            "regulated_exchange" => Ok(VenueKind::RegulatedExchange),
+            "regulated_market" => Ok(VenueKind::RegulatedMarket),
+            "trading_platform" => Ok(VenueKind::TradingPlatform),
+            "ats" => Ok(VenueKind::Ats),
+            "pts" => Ok(VenueKind::Pts),
+            "otc_facility" => Ok(VenueKind::OtcFacility),
+            "dealer" => Ok(VenueKind::Dealer),
+            "trade_reporting_facility" => Ok(VenueKind::TradeReportingFacility),
+            "unknown" => Ok(VenueKind::Unknown),
+            _ => Err(ReferenceInvalidCatalogError::new_err(
+                "invalid venue_kind: expected regulated_exchange, regulated_market, trading_platform, ats, pts, otc_facility, dealer, trade_reporting_facility, or unknown",
+            )),
+        })
+        .transpose()
+}
+
+fn parse_venue_role(value: Option<String>) -> PyResult<Option<VenueRole>> {
+    value
+        .map(|value| match value.trim().to_ascii_lowercase().as_str() {
+            "listing" => Ok(VenueRole::Listing),
+            "execution" => Ok(VenueRole::Execution),
+            "reporting" => Ok(VenueRole::Reporting),
+            _ => Err(ReferenceInvalidCatalogError::new_err(
+                "invalid venue_role: expected listing, execution, or reporting",
+            )),
+        })
+        .transpose()
+}
+
 fn normalize_exchange_id(value: String) -> String {
     if value.starts_with("exchange:") {
         value
@@ -982,6 +1554,7 @@ impl From<RustInstrument> for ReferenceInstrument {
             issuer_id: value.issuer_id.map(|v| v.to_string()),
             share_class: value.share_class,
             primary_currency_asset_id: value.primary_currency_asset_id.map(|v| v.to_string()),
+            settlement_asset_id: value.settlement_asset_id.map(|v| v.to_string()),
             underlying_instrument_id: value.underlying_instrument_id.map(|v| v.to_string()),
             expiry_unix_nanos: value.expiry_unix_nanos.map(|v| v.get()),
             strike: value
@@ -989,6 +1562,88 @@ impl From<RustInstrument> for ReferenceInstrument {
                 .map(|value| native_decimal(value.mantissa(), value.scale(), "price")),
             option_right: value.option_right,
             status: value.status.to_string(),
+        }
+    }
+}
+
+impl From<RustVenue> for ReferenceVenue {
+    fn from(value: RustVenue) -> Self {
+        Self {
+            venue_id: value.venue_id.to_string(),
+            name: value.name,
+            venue_kind: value.venue_kind.as_str().to_owned(),
+            roles: value
+                .roles
+                .into_iter()
+                .map(|role| role.as_str().to_owned())
+                .collect(),
+            mic: value.mic.map(|item| item.to_string()),
+            operating_mic: value.operating_mic.map(|item| item.to_string()),
+            parent_venue_id: value.parent_venue_id.map(|item| item.to_string()),
+            jurisdiction: value.jurisdiction.map(|item| item.to_string()),
+            status: value.status.to_string(),
+        }
+    }
+}
+
+impl From<RustVenueListing> for ReferenceVenueListing {
+    fn from(value: RustVenueListing) -> Self {
+        Self {
+            listing_id: value.listing_id.to_string(),
+            instrument_id: value.instrument_id.to_string(),
+            listing_venue_id: value.listing_venue_id.to_string(),
+            market_segment_id: value.market_segment_id.map(|item| item.to_string()),
+            listing_symbol: value.listing_symbol.to_string(),
+            listing_role: value.listing_role.as_str().to_owned(),
+            status: value.status.to_string(),
+            effective_from_unix_nanos: value.effective_from_unix_nanos.get(),
+            effective_to_unix_nanos: value.effective_to_unix_nanos.map(UnixNanos::get),
+        }
+    }
+}
+
+impl From<RustVenueMarket> for ReferenceVenueMarket {
+    fn from(value: RustVenueMarket) -> Self {
+        Self {
+            market_id: value.market_id.to_string(),
+            instrument_id: value.instrument_id.to_string(),
+            execution_venue_id: value.execution_venue_id.to_string(),
+            origin_listing_id: value.origin_listing_id.map(|item| item.to_string()),
+            market_segment_id: value.market_segment_id.map(|item| item.to_string()),
+            venue_symbol: value.venue_symbol.map(|item| item.to_string()),
+            trading_calendar_id: value.trading_calendar_id.map(|item| item.to_string()),
+            trading_session_ids: value
+                .trading_session_ids
+                .into_iter()
+                .map(|item| item.to_string())
+                .collect(),
+            base_asset_id: value.base_asset_id.map(|item| item.to_string()),
+            quote_asset_id: value.quote_asset_id.map(|item| item.to_string()),
+            status: value.status.to_string(),
+            trading_rules: ReferenceTradingRules {
+                price_increment: value
+                    .trading_rules
+                    .price_tick
+                    .map(|item| native_decimal(item.mantissa(), item.scale(), "price")),
+                quantity_increment: value
+                    .trading_rules
+                    .quantity_tick
+                    .map(|item| native_decimal(item.mantissa(), item.scale(), "quantity")),
+                minimum_quantity: value
+                    .trading_rules
+                    .minimum_quantity
+                    .map(|item| native_decimal(item.mantissa(), item.scale(), "quantity")),
+                minimum_notional: value
+                    .trading_rules
+                    .minimum_notional
+                    .map(|item| native_decimal(item.mantissa(), item.scale(), "money")),
+                contract_multiplier: value
+                    .trading_rules
+                    .contract_size
+                    .map(|item| native_decimal(item.mantissa(), item.scale(), "rate")),
+            },
+            effective_from_unix_nanos: value.effective_from_unix_nanos.get(),
+            effective_to_unix_nanos: value.effective_to_unix_nanos.map(UnixNanos::get),
         }
     }
 }
@@ -1204,6 +1859,188 @@ fn project_reference_event(
             value.catalog_revision(),
             project_market(value.market()),
         ),
+        Event::VenueUpserted(value) => reference_event(
+            py,
+            value.metadata(),
+            kind,
+            value.catalog_revision(),
+            project_venue(value.venue()),
+        ),
+        Event::VenueUpdated(value) => reference_event(
+            py,
+            value.metadata(),
+            kind,
+            value.catalog_revision(),
+            project_venue(value.venue()),
+        ),
+        Event::VenueListingUpserted(value) => reference_event(
+            py,
+            value.metadata(),
+            kind,
+            value.catalog_revision(),
+            project_venue_listing(value.listing()),
+        ),
+        Event::VenueListingUpdated(value) => reference_event(
+            py,
+            value.metadata(),
+            kind,
+            value.catalog_revision(),
+            project_venue_listing(value.listing()),
+        ),
+        Event::VenueMarketUpserted(value) => reference_event(
+            py,
+            value.metadata(),
+            kind,
+            value.catalog_revision(),
+            project_venue_market(value.market()),
+        ),
+        Event::VenueMarketUpdated(value) => reference_event(
+            py,
+            value.metadata(),
+            kind,
+            value.catalog_revision(),
+            project_venue_market(value.market()),
+        ),
+        Event::ProviderCatalogMembershipUpserted(value) => reference_event(
+            py,
+            value.metadata(),
+            kind,
+            value.catalog_revision(),
+            project_provider_catalog_membership(value.membership()),
+        ),
+        Event::ProviderCatalogMembershipUpdated(value) => reference_event(
+            py,
+            value.metadata(),
+            kind,
+            value.catalog_revision(),
+            project_provider_catalog_membership(value.membership()),
+        ),
+        Event::CoverageStateChanged(value) => reference_event(
+            py,
+            value.metadata(),
+            kind,
+            value.catalog_revision(),
+            ReferenceCoverageStateChange {
+                coverage: project_coverage(value.coverage()),
+                previous_state: enum_name(value.previous_state().variant_name()),
+            },
+        ),
+    }
+}
+
+fn enum_name(value: Option<&str>) -> String {
+    value.unwrap_or("UNKNOWN").to_ascii_lowercase()
+}
+
+fn project_venue(value: fb3::Venue<'_>) -> ReferenceVenue {
+    ReferenceVenue {
+        venue_id: value.venue_id().to_owned(),
+        name: value.name().to_owned(),
+        venue_kind: enum_name(value.venue_kind().variant_name()),
+        roles: value
+            .roles()
+            .iter()
+            .map(|role| enum_name(role.variant_name()))
+            .collect(),
+        mic: value.mic().map(ToOwned::to_owned),
+        operating_mic: value.operating_mic().map(ToOwned::to_owned),
+        parent_venue_id: value.parent_venue_id().map(ToOwned::to_owned),
+        jurisdiction: value.jurisdiction().map(ToOwned::to_owned),
+        status: enum_name(value.status().variant_name()),
+    }
+}
+
+fn project_venue_listing(value: fb3::Listing<'_>) -> ReferenceVenueListing {
+    ReferenceVenueListing {
+        listing_id: value.listing_id().to_owned(),
+        instrument_id: value.instrument_id().to_owned(),
+        listing_venue_id: value.listing_venue_id().to_owned(),
+        market_segment_id: value.market_segment_id().map(ToOwned::to_owned),
+        listing_symbol: value.listing_symbol().to_owned(),
+        listing_role: enum_name(value.listing_role().variant_name()),
+        status: enum_name(value.status().variant_name()),
+        effective_from_unix_nanos: value.effective_from_unix_nanos(),
+        effective_to_unix_nanos: optional_nanos(value.effective_to_unix_nanos()),
+    }
+}
+
+fn project_venue_market(value: fb3::Market<'_>) -> ReferenceVenueMarket {
+    let rules = value.trading_rules();
+    ReferenceVenueMarket {
+        market_id: value.market_id().to_owned(),
+        instrument_id: value.instrument_id().to_owned(),
+        execution_venue_id: value.execution_venue_id().to_owned(),
+        origin_listing_id: value.origin_listing_id().map(ToOwned::to_owned),
+        market_segment_id: value.market_segment_id().map(ToOwned::to_owned),
+        venue_symbol: value.venue_symbol().map(ToOwned::to_owned),
+        trading_calendar_id: value.trading_calendar_id().map(ToOwned::to_owned),
+        trading_session_ids: value
+            .trading_session_ids()
+            .map(|values| values.iter().map(ToOwned::to_owned).collect())
+            .unwrap_or_default(),
+        base_asset_id: value.base_asset_id().map(ToOwned::to_owned),
+        quote_asset_id: value.quote_asset_id().map(ToOwned::to_owned),
+        status: enum_name(value.status().variant_name()),
+        trading_rules: ReferenceTradingRules {
+            price_increment: rules
+                .price_tick()
+                .map(|item| semantic_decimal(item, "price")),
+            quantity_increment: rules
+                .quantity_tick()
+                .map(|item| semantic_decimal(item, "quantity")),
+            minimum_quantity: rules
+                .minimum_quantity()
+                .map(|item| semantic_decimal(item, "quantity")),
+            minimum_notional: rules
+                .minimum_notional()
+                .map(|item| semantic_decimal(item, "money")),
+            contract_multiplier: rules
+                .contract_size()
+                .map(|item| semantic_decimal(item, "rate")),
+        },
+        effective_from_unix_nanos: value.effective_from_unix_nanos(),
+        effective_to_unix_nanos: optional_nanos(value.effective_to_unix_nanos()),
+    }
+}
+
+fn project_provider_catalog_membership(
+    value: fb3::ProviderCatalogMembership<'_>,
+) -> ReferenceProviderCatalogMembership {
+    ReferenceProviderCatalogMembership {
+        source_id: value.source_id().to_owned(),
+        instrument_id: value.instrument_id().to_owned(),
+        provider_symbol: value.provider_symbol().map(ToOwned::to_owned),
+        provider_product: value.provider_product().map(ToOwned::to_owned),
+        status: enum_name(value.status().variant_name()),
+        effective_from_unix_nanos: value.effective_from_unix_nanos(),
+        effective_to_unix_nanos: optional_nanos(value.effective_to_unix_nanos()),
+    }
+}
+
+fn project_coverage(value: fb3::ReferenceCoverage<'_>) -> ReferenceCoverage {
+    ReferenceCoverage {
+        coverage_id: value.coverage_id().to_owned(),
+        source_id: value.source_id().to_owned(),
+        fact_kinds: value
+            .fact_kinds()
+            .iter()
+            .map(|kind| enum_name(kind.variant_name()))
+            .collect(),
+        scope_kind: value.scope_kind().to_owned(),
+        scope_binding: value.scope_binding().map(ToOwned::to_owned),
+        scope_ids: value
+            .scope_ids()
+            .map(|values| values.iter().map(ToOwned::to_owned).collect())
+            .unwrap_or_default(),
+        scope_instrument_kind: value.scope_instrument_kind().map(ToOwned::to_owned),
+        completeness: enum_name(value.completeness().variant_name()),
+        state: enum_name(value.state().variant_name()),
+        generation: value.generation(),
+        event_sequence: value.event_sequence(),
+        last_attempt_unix_nanos: optional_nanos(value.last_attempt_unix_nanos()),
+        last_success_unix_nanos: optional_nanos(value.last_success_unix_nanos()),
+        stale_after_unix_nanos: optional_nanos(value.stale_after_unix_nanos()),
+        has_last_known_good: value.has_last_known_good(),
     }
 }
 
@@ -1235,6 +2072,7 @@ fn project_instrument(value: fb::Instrument<'_>) -> ReferenceInstrument {
         issuer_id: value.issuer_id().map(ToOwned::to_owned),
         share_class: value.share_class().map(ToOwned::to_owned),
         primary_currency_asset_id: value.primary_currency_asset_id().map(ToOwned::to_owned),
+        settlement_asset_id: value.settlement_asset_id().map(ToOwned::to_owned),
         underlying_instrument_id: value.underlying_instrument_id().map(ToOwned::to_owned),
         expiry_unix_nanos: optional_nanos(value.expiry_unix_nanos()),
         strike: value.strike().map(|value| semantic_decimal(value, "price")),
@@ -1376,8 +2214,22 @@ fn _native_reference_contract(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<ReferenceListing>()?;
     module.add_class::<ReferenceTradingRules>()?;
     module.add_class::<ReferenceMarket>()?;
+    module.add_class::<ReferenceVenue>()?;
+    module.add_class::<ReferenceVenueListing>()?;
+    module.add_class::<ReferenceVenueMarket>()?;
+    module.add_class::<ReferenceProviderCatalogMembership>()?;
+    module.add_class::<ReferenceCoverage>()?;
+    module.add_class::<ReferenceCoverageStateChange>()?;
+    module.add_class::<ReferenceMarketResolutionRecord>()?;
+    module.add_class::<ReferenceMarketResolutionResponse>()?;
     module.add_class::<ReferenceLifecycleEvent>()?;
     module.add_class::<ReferenceCatalogStatus>()?;
+    module.add_class::<ReferenceCoverageEvidence>()?;
+    module.add_class::<ReferenceQueryEvidence>()?;
+    module.add_class::<ReferenceInstrumentSearchResponse>()?;
+    module.add_class::<ReferenceVenueSearchResponse>()?;
+    module.add_class::<ReferenceVenueListingSearchResponse>()?;
+    module.add_class::<ReferenceVenueMarketSearchResponse>()?;
     module.add_class::<ReferenceCatalog>()?;
     module.add_class::<ReferenceReadSession>()?;
     module.add_function(wrap_pyfunction!(build_info, module)?)?;

@@ -37,6 +37,7 @@ python-type-check:
 	uv run pyright --warnings
 	uv run python scripts/check/check_owner_contract_stubs.py
 	python3 scripts/check/check_python_architecture.py
+	python3 scripts/check/check_cli_boundary.py
 
 rust-fmt:
 	cargo +$(RUSTFMT_TOOLCHAIN) fmt --all

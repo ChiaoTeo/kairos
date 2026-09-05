@@ -4,13 +4,15 @@ use std::path::Path;
 use sqlx::SqlitePool;
 
 use super::provider_sync::{
-    append_staged_page, clear_staged_pages, has_last_good, load_provider_candidate, load_state,
-    option_underlyings, prepare_scan, promote_staged, provider_records, remove_last_good,
-    save_last_good, set_option_underlying, set_source_desired_state, source_definitions,
-    source_desired_states, staged_pages, upsert_source_definition,
+    ProviderCandidateSelection, append_staged_page, clear_staged_pages, has_last_good, load_state,
+    pending_coverage_state_changes, prepare_scan, provider_records, save_last_good,
+    select_provider_candidate, set_option_underlying, set_source_desired_state, set_source_failure,
+    source_definitions, staged_change_count, staged_pages, upsert_source_definition,
 };
 #[cfg(test)]
-use super::provider_sync::{load_last_good, save_state};
+use super::provider_sync::{
+    load_last_good, load_provider_candidate, option_underlyings, save_state, source_desired_states,
+};
 use super::sqlite::{open_pool, operation_lock, persistence};
 use crate::domain::{
     ProviderCatalog, ReferenceResult, ReferenceSourceDefinition, SourceDesiredState,
@@ -23,6 +25,16 @@ pub(crate) struct SqlxProviderSyncStore {
 }
 
 impl SqlxProviderSyncStore {
+    pub(crate) async fn source_scan_ids(
+        &mut self,
+        source_id: &str,
+    ) -> ReferenceResult<Vec<kairos_primitives::reference::ReferenceSourceId>> {
+        self.run(
+            |pool| async move { super::provider_sync::source_scan_ids(&pool, source_id).await },
+        )
+        .await
+    }
+
     pub(crate) async fn open(path: impl AsRef<Path>) -> ReferenceResult<Self> {
         let pool = open_pool(path.as_ref()).await.map_err(persistence)?;
         Ok(Self {
@@ -78,12 +90,45 @@ impl SqlxProviderSyncStore {
             .await
     }
 
+    #[cfg(test)]
     pub(crate) async fn load_provider_candidate(
         &mut self,
         overlay: &ProviderCatalog,
+        source_changes: &crate::services::sources::SourceChanges,
     ) -> ReferenceResult<ProviderCatalog> {
-        self.run(|pool| async move { load_provider_candidate(&pool, overlay).await })
-            .await
+        self.run(
+            |pool| async move { load_provider_candidate(&pool, overlay, source_changes).await },
+        )
+        .await
+    }
+
+    pub(crate) async fn select_provider_candidate(
+        &mut self,
+        overlay: &ProviderCatalog,
+        source_changes: &crate::services::sources::SourceChanges,
+    ) -> ReferenceResult<ProviderCandidateSelection> {
+        self.run(
+            |pool| async move { select_provider_candidate(&pool, overlay, source_changes).await },
+        )
+        .await
+    }
+
+    pub(crate) async fn pending_coverage_state_changes(
+        &mut self,
+        generation: kairos_primitives::time::Generation,
+        first_event_sequence: kairos_primitives::time::Sequence,
+        source_changes: &crate::services::sources::SourceChanges,
+    ) -> ReferenceResult<
+        Vec<(
+            kairos_reference_contract::CoverageState,
+            kairos_reference_contract::ReferenceCoverage,
+        )>,
+    > {
+        self.run(|pool| async move {
+            pending_coverage_state_changes(&pool, generation, first_event_sequence, source_changes)
+                .await
+        })
+        .await
     }
 
     #[cfg(test)]
@@ -159,18 +204,20 @@ impl SqlxProviderSyncStore {
             .await
     }
 
-    pub(crate) async fn promote_staged(&mut self, provider: &str) -> ReferenceResult<u64> {
+    pub(crate) async fn staged_change_count(&mut self, provider: &str) -> ReferenceResult<u64> {
         let provider = provider.to_owned();
-        self.run(|pool| async move { promote_staged(&pool, &provider).await })
+        self.run(|pool| async move { staged_change_count(&pool, &provider).await })
             .await
     }
 
-    pub(crate) async fn remove_last_good(&mut self, provider: &str) -> ReferenceResult<()> {
-        let provider = provider.to_owned();
-        self.run(|pool| async move { remove_last_good(&pool, &provider).await })
+    pub(crate) async fn source_definitions(
+        &mut self,
+    ) -> ReferenceResult<Vec<ReferenceSourceDefinition>> {
+        self.run(|pool| async move { source_definitions(&pool).await })
             .await
     }
 
+    #[cfg(test)]
     pub(crate) async fn source_desired_states(
         &mut self,
     ) -> ReferenceResult<Vec<(String, SourceDesiredState)>> {
@@ -184,13 +231,6 @@ impl SqlxProviderSyncStore {
                     })
                     .collect()
             })
-    }
-
-    pub(crate) async fn source_definitions(
-        &mut self,
-    ) -> ReferenceResult<Vec<ReferenceSourceDefinition>> {
-        self.run(|pool| async move { source_definitions(&pool).await })
-            .await
     }
 
     pub(crate) async fn upsert_source_definition(
@@ -213,6 +253,19 @@ impl SqlxProviderSyncStore {
         .await
     }
 
+    pub(crate) async fn set_source_failure(
+        &mut self,
+        source_id: &str,
+        has_last_known_good: bool,
+    ) -> ReferenceResult<()> {
+        let source_id = source_id.to_owned();
+        self.run(
+            |pool| async move { set_source_failure(&pool, &source_id, has_last_known_good).await },
+        )
+        .await
+    }
+
+    #[cfg(test)]
     pub(crate) async fn option_underlyings(
         &mut self,
         provider: &str,

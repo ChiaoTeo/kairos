@@ -14,7 +14,7 @@ fn market(id: &str, _symbol: &str) -> ResolvedMarket {
         id,
         format!("instrument:{id}"),
         kairos_primitives::reference::InstrumentKind::Spot,
-        "binance",
+        "venue:binance",
         "binance",
     )
     .unwrap()
@@ -66,6 +66,8 @@ fn actor_owns_sequence_and_latest_observation() {
         bid_quantity: Some("1".parse().unwrap()),
         ask_price: None,
         ask_quantity: None,
+        bid_venue_id: None,
+        ask_venue_id: None,
         bid_venue_code: None,
         ask_venue_code: None,
         tape: None,
@@ -96,6 +98,8 @@ fn selectors_filter_ingestion_and_current_queries_are_typed() {
         bid_quantity: None,
         ask_price: None,
         ask_quantity: None,
+        bid_venue_id: None,
+        ask_venue_id: None,
         bid_venue_code: None,
         ask_venue_code: None,
         tape: None,
@@ -193,6 +197,8 @@ fn out_of_order_observation_does_not_regress_current_view() {
             bid_quantity: None,
             ask_price: None,
             ask_quantity: None,
+            bid_venue_id: None,
+            ask_venue_id: None,
             bid_venue_code: None,
             ask_venue_code: None,
             tape: None,
@@ -227,6 +233,8 @@ fn source_agnostic_typed_query_rejects_ambiguous_views() {
                 bid_quantity: None,
                 ask_price: None,
                 ask_quantity: None,
+                bid_venue_id: None,
+                ask_venue_id: None,
                 bid_venue_code: None,
                 ask_venue_code: None,
                 tape: None,
@@ -247,7 +255,9 @@ fn dynamic_subscription_reconciles_reference_changes_idempotently() {
     let mut actor = MarketApplication::new("market-1", 10).unwrap();
     let id = SubscriptionId::new("dynamic-1").unwrap();
     let query = MarketSelectionQuery {
-        exchange_id: Some(kairos_primitives::reference::ExchangeId::new("binance").unwrap()),
+        execution_venue_id: Some(
+            kairos_primitives::reference::VenueId::new("venue:binance").unwrap(),
+        ),
         instrument_kind: Some(kairos_primitives::reference::InstrumentKind::Spot),
         active_only: true,
         ..Default::default()

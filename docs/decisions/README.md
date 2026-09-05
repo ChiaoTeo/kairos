@@ -50,6 +50,8 @@ Decision 记录已经作出的、具有长期影响且无法只从代码或 sche
 | 0043 | [按用户任务与运行作用域组织 Workbench 导航](0043-task-and-scope-oriented-workbench-navigation.md) | Accepted |
 | 0044 | [Conflux 由 System composition 所有](0044-system-owned-conflux.md) | Accepted |
 | 0045 | [紧凑的 Workbench 交互与命令上下文](0045-compact-workbench-interaction-context.md) | Accepted |
+| 0046 | [Reference Venue、Coverage 与 Current Query](0046-reference-venue-coverage-and-current-query.md) | Accepted |
+| 0047 | [Reference 独立 CLI 与服务层复用](0047-reference-standalone-cli-and-service-reuse.md) | Accepted |
 
 新增 Decision 时使用下一顺序编号，并至少写明 Status、Context、Decision 和 Consequences。Decision
 一旦失效，不修改历史结论；将状态改为 Superseded，并链接替代它的新 Decision。

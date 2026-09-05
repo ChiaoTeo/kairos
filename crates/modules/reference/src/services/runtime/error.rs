@@ -28,10 +28,10 @@ pub(crate) fn source_activation_unavailable_error(
         == Some(ReferenceSourceBinding::Massive(
             MassiveReferenceSource::Options,
         ));
-    let credentialed_source_without_binding = definition.credential_binding.is_none()
+    let credentialed_source_without_binding = definition.connection_id.is_none()
         && binding.is_some_and(ReferenceSourceBinding::requires_credential);
     let code = if credentialed_source_without_binding {
-        "reference.source_credential_binding_missing"
+        "reference.source_connection_id_missing"
     } else if scoped_massive_options {
         "reference.source_adapter_unavailable"
     } else if definition.sync_policy != SourceSyncPolicy::FullSnapshot
@@ -107,13 +107,13 @@ mod tests {
                 id: Some("instrument:equity:US:SPY:common".into()),
             },
             desired_state: Default::default(),
-            credential_binding: None,
+            connection_id: None,
             sync_policy: SourceSyncPolicy::ScopedSnapshot,
         };
 
         let summary = source_activation_unavailable_error(&definition);
 
-        assert_eq!(summary.code, "reference.source_credential_binding_missing");
+        assert_eq!(summary.code, "reference.source_connection_id_missing");
         assert_eq!(summary.record_kind.as_deref(), Some("reference_source"));
         assert_eq!(summary.record_id.as_deref(), Some("massive-options"));
         assert!(summary.message.contains("provider_id=massive"));

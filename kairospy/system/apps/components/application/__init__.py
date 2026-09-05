@@ -28,7 +28,7 @@ from .clients import (
 from .reference import ReferenceProcessConfig
 from .binaries import reject_owned_options, resolve_binary
 from .risk import RiskProcessConfig
-from .process_logging import start_logged_process
+from .process_logging import LoggedProcess, start_logged_process
 from .event_routes import (
     EventTransportRoute,
     ensure_instance_event_route,
@@ -184,7 +184,9 @@ def _require_event_route_declaration(
     if actual != expected:
         raise RuntimeError("ready component declares a different System event route")
     if not _process_details(pid)["alive"]:
-        raise RuntimeError("ready component event-route declaration belongs to a dead process")
+        raise RuntimeError(
+            "ready component event-route declaration belongs to a dead process"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -254,7 +256,9 @@ class ComponentProcessApplication:
                 raise RuntimeError("component event route belongs to another Workspace")
             if runtime is None:
                 if event_route.scope != "workspace":
-                    raise RuntimeError("workspace component requires a Workspace event route")
+                    raise RuntimeError(
+                        "workspace component requires a Workspace event route"
+                    )
             elif (
                 event_route.scope != "instance"
                 or event_route.launch_id != runtime.launch_id
@@ -349,15 +353,19 @@ class ComponentProcessApplication:
             if runtime is not None
             else f"kairos system logs --component {component} --workspace {self.workspace.paths.project_root}"
         )
-        return self._wait_ready(
-            component,
-            control,
-            process=process,
-            log_path=log_path,
-            initial_log_offset=startup_log_offset,
-            stream_logs=stream_startup_logs and component == "reference",
-            recovery_command=recovery_command,
-        )
+        try:
+            return self._wait_ready(
+                component,
+                control,
+                process=process,
+                log_path=log_path,
+                initial_log_offset=startup_log_offset,
+                stream_logs=stream_startup_logs and component == "reference",
+                recovery_command=recovery_command,
+            )
+        except (RuntimeError, TimeoutError):
+            declaration_path.unlink(missing_ok=True)
+            raise
 
     def _ensure_aeron_driver(self) -> None:
         health_file = self.workspace.paths.health_file("aeron")
@@ -376,7 +384,7 @@ class ComponentProcessApplication:
         aeron_dir = self.workspace.paths.aeron_dir()
         aeron_dir.mkdir(parents=True, exist_ok=True)
         log_dir = self.workspace.paths.logs / "aeron"
-        start_logged_process(
+        process = start_logged_process(
             [
                 binary,
                 "--aeron-dir",
@@ -392,6 +400,14 @@ class ComponentProcessApplication:
 
         deadline = time.monotonic() + self.ready_timeout
         while time.monotonic() < deadline:
+            return_code = process.poll()
+            if return_code is not None:
+                process.reap(timeout=self.stop_timeout)
+                health_file.unlink(missing_ok=True)
+                raise RuntimeError(
+                    "Aeron media driver exited during startup with code "
+                    f"{return_code}; inspect workspace logs"
+                )
             try:
                 value = json.loads(health_file.read_text(encoding="utf-8"))
                 pid = int(value.get("pid", 0))
@@ -407,6 +423,8 @@ class ComponentProcessApplication:
             ):
                 pass
             time.sleep(0.05)
+        process.terminate(timeout=self.stop_timeout)
+        health_file.unlink(missing_ok=True)
         raise TimeoutError(
             "Aeron media driver did not become ready; inspect workspace logs"
         )
@@ -817,8 +835,10 @@ class ComponentProcessApplication:
         instance_workspace: Any | None = None,
         event_route: EventTransportRoute | None = None,
     ) -> tuple[list[str], Mapping[str, str]]:
-        if event_route is None and component != "control" and not (
-            component == "market" and market_runtime_profile == "replay"
+        if (
+            event_route is None
+            and component != "control"
+            and not (component == "market" and market_runtime_profile == "replay")
         ):
             event_route = (
                 ensure_instance_event_route(instance_workspace)
@@ -827,7 +847,9 @@ class ComponentProcessApplication:
             )
         if component == "reference":
             if event_route is None or event_route.scope != "workspace":
-                raise RuntimeError("Reference requires an explicit Workspace event route")
+                raise RuntimeError(
+                    "Reference requires an explicit Workspace event route"
+                )
             config = reference_config or ReferenceProcessConfig(self.workspace)
             config = replace(
                 config,
@@ -870,7 +892,9 @@ class ComponentProcessApplication:
         ):
             if event_route is None:
                 raise RuntimeError(f"{component} requires an explicit event route")
-            expected_scope = "instance" if instance_workspace is not None else "workspace"
+            expected_scope = (
+                "instance" if instance_workspace is not None else "workspace"
+            )
             if event_route.scope != expected_scope:
                 raise RuntimeError(
                     f"{component} event route must have {expected_scope} scope"
@@ -985,6 +1009,8 @@ class ComponentProcessApplication:
                     if detail:
                         break
                     time.sleep(0.01)
+                if isinstance(process, LoggedProcess):
+                    process.reap(timeout=self.stop_timeout)
                 raise RuntimeError(
                     f"{component} process exited during startup with code {return_code}; "
                     f"log={log_path}"
@@ -1009,6 +1035,8 @@ class ComponentProcessApplication:
                     pass
             if time.monotonic() >= deadline:
                 stream_new_logs()
+                if isinstance(process, LoggedProcess):
+                    process.terminate(timeout=self.stop_timeout)
                 raise TimeoutError(
                     f"{component} process did not become ready within "
                     f"{self.ready_timeout:g}s; log={log_path}"

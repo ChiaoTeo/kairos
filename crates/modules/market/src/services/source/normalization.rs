@@ -2,6 +2,7 @@
 
 use kairos_conflux::{MarketEvent, MarketEventKind};
 use kairos_primitives::decimal::Money;
+use kairos_reference_contract::Venue;
 
 use super::messages::{SourceInput, SourceOrderBookUpdate};
 use crate::domain::market::ResolvedMarket;
@@ -36,9 +37,25 @@ pub(crate) fn with_epoch(
     }
 }
 
+pub(crate) fn execution_venue_id(
+    venue: Option<&Venue>,
+) -> Option<kairos_primitives::reference::VenueId> {
+    venue
+        .filter(|venue| {
+            venue.venue_kind != kairos_reference_contract::VenueKind::TradeReportingFacility
+                && venue
+                    .roles
+                    .contains(&kairos_reference_contract::VenueRole::Execution)
+        })
+        .map(|venue| venue.venue_id.clone())
+}
+
 pub(crate) fn normalize(
     market: &ResolvedMarket,
     event: MarketEvent,
+    trade_venue: Option<&Venue>,
+    bid_venue: Option<&Venue>,
+    ask_venue: Option<&Venue>,
 ) -> Result<Option<Normalized>, String> {
     let binding = market
         .runtime_route()
@@ -66,6 +83,8 @@ pub(crate) fn normalize(
             bid_quantity: event.quantity,
             ask_price: event.ask_price,
             ask_quantity: event.ask_quantity,
+            bid_venue_id: execution_venue_id(bid_venue),
+            ask_venue_id: execution_venue_id(ask_venue),
             bid_venue_code: venue.bid_exchange.clone(),
             ask_venue_code: venue.ask_exchange.clone(),
             tape: venue.tape,
@@ -73,7 +92,7 @@ pub(crate) fn normalize(
             provider: provider.clone(),
         }),
         MarketEventKind::Trade => MarketObservation::Trade(Trade {
-            scope: trade_scope(market, &provider, &venue)?,
+            scope: trade_scope(market, &provider, &venue, trade_venue)?,
             instrument_id: market.instrument_id.clone(),
             trade_id: None,
             price: event.price.ok_or("trade event has no price")?,
@@ -245,6 +264,7 @@ fn trade_scope(
     market: &ResolvedMarket,
     provider: &kairos_primitives::market::Provider,
     evidence: &kairos_conflux::MarketVenueEvidence,
+    resolved_venue: Option<&Venue>,
 ) -> Result<crate::ObservationScope, String> {
     if provider.as_str() != "massive" {
         return Ok(market.scope.clone());
@@ -253,31 +273,32 @@ fn trade_scope(
         .trade_exchange
         .as_deref()
         .ok_or("Massive trade has no venue code; observation quarantined")?;
-    let exchange = match code {
-        "19" => "exchange:cboe-bzx",
-        "4" => {
-            return Err(format!(
-                "Massive trade venue {code} is a reporting facility; observation quarantined"
-            ));
-        },
-        _ => {
-            return Err(format!(
-                "Massive trade venue code {code} is unresolved; observation quarantined"
-            ));
-        },
-    };
+    let resolved_venue = resolved_venue.ok_or_else(|| {
+        format!("Massive trade venue code {code} is unresolved; observation quarantined")
+    })?;
+    if resolved_venue.venue_kind == kairos_reference_contract::VenueKind::TradeReportingFacility
+        || !resolved_venue
+            .roles
+            .contains(&kairos_reference_contract::VenueRole::Execution)
+    {
+        return Err(format!(
+            "Massive trade venue {code} resolves to non-execution facility {}; observation quarantined",
+            resolved_venue.venue_id
+        ));
+    }
+    let execution_venue = resolved_venue.venue_id.as_str();
     let Some(market_id) = market.market_id() else {
         return Err(format!(
-            "Massive trade venue {exchange} cannot be joined to a canonical market from a consolidated subscription; observation quarantined"
+            "Massive trade venue {execution_venue} cannot be joined to a canonical market from a consolidated subscription; observation quarantined"
         ));
     };
     if !market
-        .exchange_id
+        .execution_venue_id
         .as_ref()
-        .is_some_and(|value| value.as_str().eq_ignore_ascii_case(exchange))
+        .is_some_and(|value| value.as_str().eq_ignore_ascii_case(execution_venue))
     {
         return Err(format!(
-            "Massive trade venue {exchange} does not match subscribed canonical market {}; observation quarantined",
+            "Massive trade venue {execution_venue} does not match subscribed canonical market {}; observation quarantined",
             market_id
         ));
     }
@@ -298,7 +319,7 @@ mod tests {
             "market:cboe-bzx:equity:AAPL",
             "instrument:equity:US:AAPL:common",
             kairos_primitives::reference::InstrumentKind::Equity,
-            "exchange:cboe-bzx",
+            "venue:cboe-bzx",
             ProviderRouteBinding::new("massive", "equity", "AAPL").unwrap(),
         )
         .unwrap()
@@ -342,14 +363,64 @@ mod tests {
         event.venue.ask_exchange = Some("11".into());
         event.venue.tape = Some(3);
         let Normalized::Observation(crate::MarketObservation::Quote(quote)) =
-            normalize(&massive_market(), event).unwrap().unwrap()
+            normalize(&massive_market(), event, None, None, None)
+                .unwrap()
+                .unwrap()
         else {
             panic!("expected quote");
         };
         assert!(matches!(quote.scope, ObservationScope::Consolidated { .. }));
         assert_eq!(quote.bid_venue_code.as_deref(), Some("19"));
         assert_eq!(quote.ask_venue_code.as_deref(), Some("11"));
+        assert!(quote.bid_venue_id.is_none());
+        assert!(quote.ask_venue_id.is_none());
         assert_eq!(quote.tape, Some(3));
+    }
+
+    #[test]
+    fn quote_side_identities_are_independent_and_exclude_reporting_facilities() {
+        let bid = kairos_reference_contract::Venue {
+            venue_id: kairos_primitives::reference::VenueId::new("venue:bid").unwrap(),
+            name: "Bid venue".into(),
+            venue_kind: kairos_reference_contract::VenueKind::TradingPlatform,
+            roles: [kairos_reference_contract::VenueRole::Execution]
+                .into_iter()
+                .collect(),
+            mic: None,
+            operating_mic: None,
+            parent_venue_id: None,
+            jurisdiction: None,
+            status: "active".into(),
+        };
+        let mut ask = bid.clone();
+        ask.venue_id = kairos_primitives::reference::VenueId::new("venue:ask").unwrap();
+        for reporting in [false, true] {
+            if reporting {
+                // Even contradictory execution-role evidence cannot turn a TRF into an execution venue.
+                ask.venue_kind = kairos_reference_contract::VenueKind::TradeReportingFacility;
+            }
+            let mut event = event(MarketEventKind::Quote);
+            event.venue.bid_exchange = Some("19".into());
+            event.venue.ask_exchange = Some("11".into());
+            let Normalized::Observation(crate::MarketObservation::Quote(quote)) =
+                normalize(&massive_market(), event, None, Some(&bid), Some(&ask))
+                    .unwrap()
+                    .unwrap()
+            else {
+                panic!("expected quote");
+            };
+            assert_eq!(quote.bid_venue_id.as_ref(), Some(&bid.venue_id));
+            assert_eq!(
+                quote.ask_venue_id.as_ref(),
+                (!reporting).then_some(&ask.venue_id)
+            );
+            assert_eq!(quote.ask_venue_code.as_deref(), Some("11"));
+        }
+        ask.venue_kind = kairos_reference_contract::VenueKind::TradingPlatform;
+        ask.roles = [kairos_reference_contract::VenueRole::Listing]
+            .into_iter()
+            .collect();
+        assert!(super::execution_venue_id(Some(&ask)).is_none());
     }
 
     #[test]
@@ -365,7 +436,9 @@ mod tests {
             derivation: "provider".into(),
         });
         let Normalized::Observation(crate::MarketObservation::Bar(bar)) =
-            normalize(&massive_consolidated(), event).unwrap().unwrap()
+            normalize(&massive_consolidated(), event, None, None, None)
+                .unwrap()
+                .unwrap()
         else {
             panic!("expected bar");
         };
@@ -381,9 +454,28 @@ mod tests {
     fn massive_trade_uses_actual_venue_and_quarantines_reporting_facility() {
         let mut venue_trade = event(MarketEventKind::Trade);
         venue_trade.venue.trade_exchange = Some("19".into());
-        let Normalized::Observation(crate::MarketObservation::Trade(trade)) =
-            normalize(&massive_market(), venue_trade).unwrap().unwrap()
-        else {
+        let execution_venue = kairos_reference_contract::Venue {
+            venue_id: kairos_primitives::reference::VenueId::new("venue:cboe-bzx").unwrap(),
+            name: "Cboe BZX".into(),
+            venue_kind: kairos_reference_contract::VenueKind::RegulatedExchange,
+            roles: [kairos_reference_contract::VenueRole::Execution]
+                .into_iter()
+                .collect(),
+            mic: None,
+            operating_mic: None,
+            parent_venue_id: None,
+            jurisdiction: None,
+            status: "active".into(),
+        };
+        let Normalized::Observation(crate::MarketObservation::Trade(trade)) = normalize(
+            &massive_market(),
+            venue_trade,
+            Some(&execution_venue),
+            None,
+            None,
+        )
+        .unwrap()
+        .unwrap() else {
             panic!("expected trade");
         };
         assert_eq!(
@@ -394,9 +486,28 @@ mod tests {
         let mut trf_trade = event(MarketEventKind::Trade);
         trf_trade.venue.trade_exchange = Some("4".into());
         trf_trade.venue.trf_id = Some(201);
-        let error = normalize(&massive_market(), trf_trade)
-            .err()
-            .expect("TRF trade must be quarantined");
-        assert!(error.contains("reporting facility"));
+        let reporting_venue = kairos_reference_contract::Venue {
+            venue_id: kairos_primitives::reference::VenueId::new("venue:finra-nyse-trf").unwrap(),
+            name: "FINRA NYSE TRF".into(),
+            venue_kind: kairos_reference_contract::VenueKind::TradeReportingFacility,
+            roles: [kairos_reference_contract::VenueRole::Reporting]
+                .into_iter()
+                .collect(),
+            mic: None,
+            operating_mic: None,
+            parent_venue_id: None,
+            jurisdiction: None,
+            status: "active".into(),
+        };
+        let error = normalize(
+            &massive_market(),
+            trf_trade,
+            Some(&reporting_venue),
+            None,
+            None,
+        )
+        .err()
+        .expect("TRF trade must be quarantined");
+        assert!(error.contains("non-execution facility"));
     }
 }

@@ -33,6 +33,8 @@ impl<'a> Quote<'a> {
     pub const VT_TAPE: ::flatbuffers::VOffsetT = 24;
     pub const VT_SOURCE_OBSERVED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 26;
     pub const VT_RECEIVED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 28;
+    pub const VT_BID_VENUE_ID: ::flatbuffers::VOffsetT = 30;
+    pub const VT_ASK_VENUE_ID: ::flatbuffers::VOffsetT = 32;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -51,6 +53,12 @@ impl<'a> Quote<'a> {
         let mut builder = QuoteBuilder::new(_fbb);
         builder.add_received_at_unix_nanos(args.received_at_unix_nanos);
         builder.add_source_observed_at_unix_nanos(args.source_observed_at_unix_nanos);
+        if let Some(x) = args.ask_venue_id {
+            builder.add_ask_venue_id(x);
+        }
+        if let Some(x) = args.bid_venue_id {
+            builder.add_bid_venue_id(x);
+        }
         builder.add_tape(args.tape);
         if let Some(x) = args.ask_venue_code {
             builder.add_ask_venue_code(x);
@@ -217,6 +225,26 @@ impl<'a> Quote<'a> {
                 .unwrap()
         }
     }
+    #[inline]
+    pub fn bid_venue_id(&self) -> Option<&'a str> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(Quote::VT_BID_VENUE_ID, None)
+        }
+    }
+    #[inline]
+    pub fn ask_venue_id(&self) -> Option<&'a str> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(Quote::VT_ASK_VENUE_ID, None)
+        }
+    }
 }
 
 impl ::flatbuffers::Verifiable for Quote<'_> {
@@ -287,6 +315,16 @@ impl ::flatbuffers::Verifiable for Quote<'_> {
                 Self::VT_RECEIVED_AT_UNIX_NANOS,
                 false,
             )?
+            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
+                "bid_venue_id",
+                Self::VT_BID_VENUE_ID,
+                false,
+            )?
+            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
+                "ask_venue_id",
+                Self::VT_ASK_VENUE_ID,
+                false,
+            )?
             .finish();
         Ok(())
     }
@@ -305,6 +343,8 @@ pub struct QuoteArgs<'a> {
     pub tape: u32,
     pub source_observed_at_unix_nanos: u64,
     pub received_at_unix_nanos: u64,
+    pub bid_venue_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub ask_venue_id: Option<::flatbuffers::WIPOffset<&'a str>>,
 }
 impl<'a> Default for QuoteArgs<'a> {
     #[inline]
@@ -323,6 +363,8 @@ impl<'a> Default for QuoteArgs<'a> {
             tape: 0,
             source_observed_at_unix_nanos: 0,
             received_at_unix_nanos: 0,
+            bid_venue_id: None,
+            ask_venue_id: None,
         }
     }
 }
@@ -418,6 +460,16 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> QuoteBuilder<'a, 'b, A> {
             .push_slot::<u64>(Quote::VT_RECEIVED_AT_UNIX_NANOS, received_at_unix_nanos, 0);
     }
     #[inline]
+    pub fn add_bid_venue_id(&mut self, bid_venue_id: ::flatbuffers::WIPOffset<&'b str>) {
+        self.fbb_
+            .push_slot_always::<::flatbuffers::WIPOffset<_>>(Quote::VT_BID_VENUE_ID, bid_venue_id);
+    }
+    #[inline]
+    pub fn add_ask_venue_id(&mut self, ask_venue_id: ::flatbuffers::WIPOffset<&'b str>) {
+        self.fbb_
+            .push_slot_always::<::flatbuffers::WIPOffset<_>>(Quote::VT_ASK_VENUE_ID, ask_venue_id);
+    }
+    #[inline]
     pub fn new(_fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>) -> QuoteBuilder<'a, 'b, A> {
         let start = _fbb.start_table();
         QuoteBuilder {
@@ -455,6 +507,8 @@ impl ::core::fmt::Debug for Quote<'_> {
             &self.source_observed_at_unix_nanos(),
         );
         ds.field("received_at_unix_nanos", &self.received_at_unix_nanos());
+        ds.field("bid_venue_id", &self.bid_venue_id());
+        ds.field("ask_venue_id", &self.ask_venue_id());
         ds.finish()
     }
 }

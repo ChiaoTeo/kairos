@@ -18,9 +18,9 @@ python3 "$repo_root/scripts/generate/validate_v2_schemas.py"
 schemas=()
 while IFS= read -r schema; do
   schemas+=("$schema")
-done < <(find "$schema_root/v2" -type f -name '*.fbs' | sort)
+done < <(find "$schema_root" -mindepth 2 -type f -name '*.fbs' -path '*/v[0-9]*/*' | sort)
 if (( ${#schemas[@]} == 0 )); then
-  echo "no v2 FlatBuffers schemas found" >&2
+  echo "no versioned FlatBuffers schemas found" >&2
   exit 1
 fi
 

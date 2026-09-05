@@ -5,8 +5,9 @@ use std::collections::BTreeSet;
 use kairos_primitives::decimal::{Money, Price, Quantity};
 use kairos_primitives::market::Provider;
 use kairos_primitives::reference::{
-    AssetClass, AssetId, ExchangeId, InstrumentId, InstrumentKind, IssuerId, ListingId, MarketId,
-    ReferenceSourceId, ReferenceStatus, Symbol,
+    AssetClass, AssetId, ExchangeId, InstrumentId, InstrumentKind, IssuerId, JurisdictionCode,
+    ListingId, MarketId, MarketSegmentId, Mic, ReferenceSourceId, ReferenceStatus, Symbol,
+    TradingCalendarId, TradingSessionId, VenueId,
 };
 use kairos_primitives::time::{Generation, UnixNanos};
 use serde::{Deserialize, Serialize};
@@ -21,7 +22,7 @@ pub struct ReferenceSourceDefinition {
     pub scope: SourceScope,
     pub desired_state: SourceDesiredState,
     #[serde(default)]
-    pub credential_binding: Option<SourceCredentialBinding>,
+    pub connection_id: Option<SourceConnectionId>,
     pub sync_policy: SourceSyncPolicy,
 }
 
@@ -35,7 +36,7 @@ impl ReferenceSourceDefinition {
             provider_id: Provider::new(source_id)?,
             scope: SourceScope::global(),
             desired_state: SourceDesiredState::Enabled,
-            credential_binding: None,
+            connection_id: None,
             sync_policy: SourceSyncPolicy::FullSnapshot,
         })
     }
@@ -43,19 +44,25 @@ impl ReferenceSourceDefinition {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
-pub struct SourceCredentialBinding(String);
+pub struct SourceConnectionId(String);
 
-impl SourceCredentialBinding {
+impl SourceConnectionId {
     pub fn new(value: impl Into<String>) -> ReferenceResult<Self> {
         let value = value.into();
-        if value.trim().is_empty() {
+        if value.is_empty() {
             return Err(ReferenceError::Invalid(
-                "source credential binding cannot be empty".into(),
+                "source connection id cannot be empty".into(),
             ));
         }
-        if value.trim() != value {
+        if value.len() > 64
+            || !value.bytes().enumerate().all(|(index, byte)| {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || (index > 0 && matches!(byte, b'-' | b'_'))
+            })
+        {
             return Err(ReferenceError::Invalid(
-                "source credential binding cannot contain leading or trailing whitespace".into(),
+                "source connection id must be a path-safe lowercase identifier".into(),
             ));
         }
         Ok(Self(value))
@@ -66,7 +73,7 @@ impl SourceCredentialBinding {
     }
 }
 
-impl<'de> Deserialize<'de> for SourceCredentialBinding {
+impl<'de> Deserialize<'de> for SourceConnectionId {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -76,7 +83,7 @@ impl<'de> Deserialize<'de> for SourceCredentialBinding {
     }
 }
 
-impl std::ops::Deref for SourceCredentialBinding {
+impl std::ops::Deref for SourceConnectionId {
     type Target = str;
 
     fn deref(&self) -> &Self::Target {
@@ -84,7 +91,7 @@ impl std::ops::Deref for SourceCredentialBinding {
     }
 }
 
-impl std::fmt::Display for SourceCredentialBinding {
+impl std::fmt::Display for SourceConnectionId {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(self.as_str())
     }
@@ -243,9 +250,12 @@ pub struct AffectedReferenceSet {
 }
 
 impl AffectedReferenceSet {
-    pub fn from_events<'a>(events: impl IntoIterator<Item = &'a LifecycleEvent>) -> Self {
+    pub fn from_events<E: std::borrow::Borrow<LifecycleEvent>>(
+        events: impl IntoIterator<Item = E>,
+    ) -> Self {
         let mut affected = Self::default();
         for event in events {
+            let event = event.borrow();
             let Some(kind) = event.record_kind.as_deref() else {
                 affected.requires_full_replace = true;
                 continue;
@@ -274,15 +284,6 @@ impl AffectedReferenceSet {
             }
         }
         affected
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.exchanges.is_empty()
-            && self.assets.is_empty()
-            && self.instruments.is_empty()
-            && self.listings.is_empty()
-            && self.markets.is_empty()
-            && !self.requires_full_replace
     }
 
     pub fn total_count(&self) -> usize {
@@ -528,32 +529,35 @@ pub fn canonical_exchange_name(exchange_id: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 mod source_workflow_tests {
+    use std::collections::BTreeSet;
+
     use kairos_primitives::market::Provider;
-    use kairos_primitives::reference::ReferenceSourceId;
+    use kairos_primitives::reference::{Mic, ReferenceSourceId, ReferenceStatus, VenueId};
 
     use super::{
-        ReferenceSourceDefinition, SourceCredentialBinding, SourceDesiredState, SourceScope,
-        SourceSyncPolicy, SourceTickBudget, SourceWorkItem, SourceWorkReason,
+        ReferenceSourceDefinition, SourceConnectionId, SourceDesiredState, SourceScope,
+        SourceSyncPolicy, SourceTickBudget, SourceWorkItem, SourceWorkReason, Venue, VenueKind,
+        VenueRole,
     };
     #[test]
-    fn source_definition_credential_binding_is_typed_but_serializes_as_string() {
+    fn source_definition_connection_id_is_typed_but_serializes_as_string() {
         let definition = ReferenceSourceDefinition {
             source_id: ReferenceSourceId::new("massive-options").unwrap(),
             provider_id: Provider::new("massive").unwrap(),
             scope: SourceScope::global(),
             desired_state: SourceDesiredState::Enabled,
-            credential_binding: Some(SourceCredentialBinding::new("massive.default").unwrap()),
+            connection_id: Some(SourceConnectionId::new("massive-main").unwrap()),
             sync_policy: SourceSyncPolicy::ScopedSnapshot,
         };
 
         let value = serde_json::to_value(&definition).unwrap();
-        assert_eq!(value["credential_binding"], "massive.default");
+        assert_eq!(value["connection_id"], "massive-main");
 
         let invalid = serde_json::json!({
             "source_id": "massive-options",
             "provider_id": "massive",
             "desired_state": "enabled",
-            "credential_binding": " massive.default ",
+            "connection_id": " massive-main ",
             "sync_policy": "scoped_snapshot"
         });
         assert!(serde_json::from_value::<ReferenceSourceDefinition>(invalid).is_err());
@@ -567,7 +571,7 @@ mod source_workflow_tests {
             "provider_product": "options",
             "scope": { "kind": "global", "id": null },
             "desired_state": "enabled",
-            "credential_binding": null,
+            "connection_id": null,
             "sync_policy": "scoped_snapshot"
         });
 
@@ -644,6 +648,31 @@ mod source_workflow_tests {
         assert!(affected.requires_full_replace);
         assert_eq!(affected.write_mode(), "full_replace");
     }
+
+    #[test]
+    fn venue_requires_an_explicit_role_and_cannot_parent_itself() {
+        let venue_id = VenueId::new("venue:XNAS").unwrap();
+        let mut venue = Venue {
+            venue_id: venue_id.clone(),
+            name: "Nasdaq Stock Market".into(),
+            venue_kind: VenueKind::RegulatedExchange,
+            roles: BTreeSet::new(),
+            mic: Some(Mic::new("XNAS").unwrap()),
+            operating_mic: Some(Mic::new("XNAS").unwrap()),
+            parent_venue_id: None,
+            jurisdiction: None,
+            status: ReferenceStatus::Active,
+        };
+        assert!(venue.validate().is_err());
+
+        venue.roles.insert(VenueRole::Listing);
+        venue.roles.insert(VenueRole::Execution);
+        venue.parent_venue_id = Some(venue_id);
+        assert!(venue.validate().is_err());
+
+        venue.parent_venue_id = None;
+        venue.validate().unwrap();
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -671,11 +700,193 @@ pub struct Instrument {
     pub share_class: Option<String>,
     #[serde(default)]
     pub primary_currency_asset_id: Option<AssetId>,
+    #[serde(default)]
+    pub settlement_asset_id: Option<AssetId>,
     pub underlying_instrument_id: Option<InstrumentId>,
     pub expiry_unix_nanos: Option<UnixNanos>,
     pub strike: Option<Price>,
     pub option_right: Option<String>,
     pub status: ReferenceStatus,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VenueKind {
+    RegulatedExchange,
+    RegulatedMarket,
+    TradingPlatform,
+    Ats,
+    Pts,
+    OtcFacility,
+    Dealer,
+    TradeReportingFacility,
+    #[default]
+    Unknown,
+}
+
+impl VenueKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::RegulatedExchange => "regulated_exchange",
+            Self::RegulatedMarket => "regulated_market",
+            Self::TradingPlatform => "trading_platform",
+            Self::Ats => "ats",
+            Self::Pts => "pts",
+            Self::OtcFacility => "otc_facility",
+            Self::Dealer => "dealer",
+            Self::TradeReportingFacility => "trade_reporting_facility",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VenueRole {
+    Listing,
+    Execution,
+    Reporting,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Venue {
+    pub venue_id: VenueId,
+    pub name: String,
+    pub venue_kind: VenueKind,
+    pub roles: BTreeSet<VenueRole>,
+    pub mic: Option<Mic>,
+    pub operating_mic: Option<Mic>,
+    pub parent_venue_id: Option<VenueId>,
+    pub jurisdiction: Option<JurisdictionCode>,
+    pub status: ReferenceStatus,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VenueIdentifierKind {
+    Exchange,
+    ReportingFacility,
+    Mic,
+}
+
+impl VenueIdentifierKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Exchange => "exchange",
+            Self::ReportingFacility => "reporting_facility",
+            Self::Mic => "mic",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct VenueIdentifierMapping {
+    pub source_id: ReferenceSourceId,
+    pub provider: kairos_primitives::market::Provider,
+    pub provider_product: String,
+    pub identifier_kind: VenueIdentifierKind,
+    pub identifier: String,
+    pub venue_id: VenueId,
+    pub status: ReferenceStatus,
+}
+
+impl Venue {
+    pub fn validate(&self) -> ReferenceResult<()> {
+        if self.name.trim().is_empty() {
+            return Err(ReferenceError::Invalid("venue name cannot be empty".into()));
+        }
+        if self.roles.is_empty() {
+            return Err(ReferenceError::Invalid(format!(
+                "venue {} must have at least one role",
+                self.venue_id
+            )));
+        }
+        if self.parent_venue_id.as_ref() == Some(&self.venue_id) {
+            return Err(ReferenceError::Invalid(format!(
+                "venue {} cannot be its own parent",
+                self.venue_id
+            )));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ListingRole {
+    Primary,
+    Secondary,
+    CrossListing,
+    AdmissionWithoutPrimaryDesignation,
+    #[default]
+    Unknown,
+}
+
+impl ListingRole {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Primary => "primary",
+            Self::Secondary => "secondary",
+            Self::CrossListing => "cross_listing",
+            Self::AdmissionWithoutPrimaryDesignation => "admission_without_primary_designation",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct VenueListing {
+    #[serde(default)]
+    pub source_id: Option<ReferenceSourceId>,
+    pub listing_id: ListingId,
+    pub instrument_id: InstrumentId,
+    pub listing_venue_id: VenueId,
+    pub market_segment_id: Option<MarketSegmentId>,
+    pub listing_symbol: Symbol,
+    pub listing_role: ListingRole,
+    pub status: ReferenceStatus,
+    pub effective_from_unix_nanos: UnixNanos,
+    pub effective_to_unix_nanos: Option<UnixNanos>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TradingRules {
+    pub price_tick: Option<Price>,
+    pub quantity_tick: Option<Quantity>,
+    pub price_precision: i32,
+    pub quantity_precision: i32,
+    pub minimum_quantity: Option<Quantity>,
+    pub minimum_notional: Option<Money>,
+    pub contract_size: Option<Quantity>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct VenueMarket {
+    pub market_id: MarketId,
+    pub instrument_id: InstrumentId,
+    pub execution_venue_id: VenueId,
+    pub origin_listing_id: Option<ListingId>,
+    pub market_segment_id: Option<MarketSegmentId>,
+    pub venue_symbol: Option<Symbol>,
+    pub trading_calendar_id: Option<TradingCalendarId>,
+    pub trading_session_ids: Vec<TradingSessionId>,
+    pub base_asset_id: Option<AssetId>,
+    pub quote_asset_id: Option<AssetId>,
+    pub status: ReferenceStatus,
+    pub trading_rules: TradingRules,
+    pub effective_from_unix_nanos: UnixNanos,
+    pub effective_to_unix_nanos: Option<UnixNanos>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ProviderCatalogMembership {
+    pub source_id: ReferenceSourceId,
+    pub instrument_id: InstrumentId,
+    pub provider_symbol: Option<String>,
+    pub provider_product: Option<String>,
+    pub status: ReferenceStatus,
+    pub effective_from_unix_nanos: UnixNanos,
+    pub effective_to_unix_nanos: Option<UnixNanos>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -749,20 +960,35 @@ pub struct LifecycleEvent {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProviderCatalog {
+    #[serde(default)]
+    pub venues: Vec<Venue>,
     pub exchanges: Vec<Exchange>,
     pub assets: Vec<Asset>,
     pub instruments: Vec<Instrument>,
     pub listings: Vec<Listing>,
     pub markets: Vec<Market>,
+    #[serde(default)]
+    pub venue_listings: Vec<VenueListing>,
+    #[serde(default)]
+    pub venue_markets: Vec<VenueMarket>,
+    #[serde(default)]
+    pub provider_catalog_memberships: Vec<ProviderCatalogMembership>,
+    #[serde(default)]
+    pub venue_identifier_mappings: Vec<VenueIdentifierMapping>,
 }
 
 impl ProviderCatalog {
     pub fn record_count(&self) -> usize {
-        self.exchanges.len()
+        self.venues.len()
+            + self.exchanges.len()
             + self.assets.len()
             + self.instruments.len()
             + self.listings.len()
             + self.markets.len()
+            + self.venue_listings.len()
+            + self.venue_markets.len()
+            + self.provider_catalog_memberships.len()
+            + self.venue_identifier_mappings.len()
     }
 
     /// Merge independently authoritative provider catalogs into one
@@ -772,11 +998,15 @@ impl ProviderCatalog {
         catalogs: impl IntoIterator<Item = &'a ProviderCatalog>,
     ) -> ReferenceResult<Self> {
         let mut exchanges = std::collections::BTreeMap::new();
+        let mut venues = std::collections::BTreeMap::new();
         let mut assets = std::collections::BTreeMap::new();
         let mut instruments = std::collections::BTreeMap::new();
         let mut listings = std::collections::BTreeMap::new();
         let mut markets = std::collections::BTreeMap::new();
-        let mut conflicts = Vec::new();
+        let mut venue_listings = std::collections::BTreeMap::new();
+        let mut venue_markets = std::collections::BTreeMap::new();
+        let mut provider_catalog_memberships = std::collections::BTreeMap::new();
+        let mut venue_identifier_mappings = std::collections::BTreeMap::new();
 
         macro_rules! merge_exact {
             ($catalog:expr, $field:ident, $key:expr, $label:literal) => {
@@ -786,16 +1016,23 @@ impl ProviderCatalog {
                         .insert(key.clone(), value.clone())
                         .is_some_and(|previous| previous != *value)
                     {
-                        conflicts.push(format!(
-                            concat!("irreconcilable canonical ", $label, " conflict for {}"),
-                            key
-                        ));
+                        return Err(ReferenceError::CanonicalConflict {
+                            record_kind: $label,
+                            record_id: key.to_string(),
+                            fields: vec!["assertion"],
+                        });
                     }
                 }
             };
         }
 
         for catalog in catalogs {
+            merge_exact!(
+                catalog,
+                venues,
+                |value: &Venue| value.venue_id.clone(),
+                "venue"
+            );
             merge_exact!(
                 catalog,
                 exchanges,
@@ -842,22 +1079,62 @@ impl ProviderCatalog {
                 |value: &Market| value.market_id.clone(),
                 "market"
             );
+            merge_exact!(
+                catalog,
+                venue_listings,
+                |value: &VenueListing| value.listing_id.clone(),
+                "venue_listing"
+            );
+            merge_exact!(
+                catalog,
+                venue_markets,
+                |value: &VenueMarket| value.market_id.clone(),
+                "venue_market"
+            );
+            for value in &catalog.provider_catalog_memberships {
+                let key = (value.source_id.clone(), value.instrument_id.clone());
+                if provider_catalog_memberships
+                    .insert(key.clone(), value.clone())
+                    .is_some_and(|previous| previous != *value)
+                {
+                    return Err(ReferenceError::CanonicalConflict {
+                        record_kind: "provider_catalog_membership",
+                        record_id: format!("{}:{}", key.0, key.1),
+                        fields: vec!["assertion"],
+                    });
+                }
+            }
+            for value in &catalog.venue_identifier_mappings {
+                let key = (
+                    value.provider.clone(),
+                    value.provider_product.clone(),
+                    value.identifier_kind,
+                    value.identifier.clone(),
+                );
+                if venue_identifier_mappings
+                    .insert(key.clone(), value.clone())
+                    .is_some_and(|previous| previous != *value)
+                {
+                    return Err(ReferenceError::CanonicalConflict {
+                        record_kind: "venue_identifier_mapping",
+                        record_id: format!("{}:{}:{}:{}", key.0, key.1, key.2.as_str(), key.3),
+                        fields: vec!["assertion"],
+                    });
+                }
+            }
         }
 
-        if !conflicts.is_empty() {
-            let sample = conflicts.iter().take(8).cloned().collect::<Vec<_>>();
-            return Err(ReferenceError::Invalid(format!(
-                "providers returned {} canonical record conflicts (sample: {})",
-                conflicts.len(),
-                sample.join(", ")
-            )));
-        }
         let candidate = Self {
+            venues: venues.into_values().collect(),
             exchanges: exchanges.into_values().collect(),
             assets: assets.into_values().collect(),
             instruments: instruments.into_values().collect(),
             listings: listings.into_values().collect(),
             markets: markets.into_values().collect(),
+            venue_listings: venue_listings.into_values().collect(),
+            venue_markets: venue_markets.into_values().collect(),
+            provider_catalog_memberships: provider_catalog_memberships.into_values().collect(),
+            venue_identifier_mappings: venue_identifier_mappings.into_values().collect(),
         };
         Ok(candidate)
     }
@@ -901,12 +1178,46 @@ impl ProviderCatalog {
         }
 
         unique(&self.exchanges, "exchange", |value| &value.exchange_id)?;
+        unique(&self.venues, "venue", |value| &value.venue_id)?;
         unique(&self.assets, "asset", |value| &value.asset_id)?;
         unique(&self.instruments, "instrument", |value| {
             &value.instrument_id
         })?;
         unique(&self.listings, "listing", |value| &value.listing_id)?;
         unique(&self.markets, "market", |value| &value.market_id)?;
+        unique(&self.venue_listings, "venue listing", |value| {
+            &value.listing_id
+        })?;
+        unique(&self.venue_markets, "venue market", |value| {
+            &value.market_id
+        })?;
+        let mut mapping_keys = std::collections::BTreeSet::new();
+        for value in &self.venue_identifier_mappings {
+            required(&value.provider_product, "venue identifier mapping product")?;
+            required(&value.identifier, "venue identifier mapping identifier")?;
+            let key = (
+                value.provider.clone(),
+                value.provider_product.clone(),
+                value.identifier_kind,
+                value.identifier.clone(),
+            );
+            if !mapping_keys.insert(key) {
+                return Err(ReferenceError::DuplicateId {
+                    record_kind: "venue identifier mapping".into(),
+                    record_id: format!(
+                        "{}:{}:{}:{}",
+                        value.provider,
+                        value.provider_product,
+                        value.identifier_kind.as_str(),
+                        value.identifier
+                    ),
+                });
+            }
+        }
+
+        for venue in &self.venues {
+            venue.validate()?;
+        }
 
         for exchange in &self.exchanges {
             required(
@@ -931,6 +1242,11 @@ impl ProviderCatalog {
                 &format!("asset {} status", asset.asset_id),
             )?;
         }
+        let instrument_ids: std::collections::BTreeSet<_> = self
+            .instruments
+            .iter()
+            .map(|value| value.instrument_id.as_str())
+            .collect();
         for instrument in &self.instruments {
             required(
                 &instrument.symbol,
@@ -994,11 +1310,7 @@ impl ProviderCatalog {
                         instrument.instrument_id
                     )));
                 }
-                if !self
-                    .instruments
-                    .iter()
-                    .any(|value| value.instrument_id.as_str() == underlying_id)
-                {
+                if !instrument_ids.contains(underlying_id) {
                     return Err(ReferenceError::Invalid(format!(
                         "instrument {} references missing underlying instrument {}",
                         instrument.instrument_id, underlying_id
@@ -1007,11 +1319,6 @@ impl ProviderCatalog {
             }
         }
 
-        let instrument_ids: std::collections::BTreeSet<_> = self
-            .instruments
-            .iter()
-            .map(|value| value.instrument_id.as_str())
-            .collect();
         let listing_ids: std::collections::BTreeSet<_> = self
             .listings
             .iter()
@@ -1027,6 +1334,16 @@ impl ProviderCatalog {
             .iter()
             .map(|value| value.asset_id.as_str())
             .collect();
+        for instrument in &self.instruments {
+            if let Some(asset_id) = instrument.settlement_asset_id.as_deref() {
+                if !asset_ids.contains(asset_id) {
+                    return Err(ReferenceError::Invalid(format!(
+                        "instrument {} references missing settlement asset {}",
+                        instrument.instrument_id, asset_id
+                    )));
+                }
+            }
+        }
         for listing in &self.listings {
             required(
                 listing.exchange_symbol.as_str(),
@@ -1161,6 +1478,126 @@ impl ProviderCatalog {
                 }
             }
         }
+        let venues = self
+            .venues
+            .iter()
+            .map(|venue| (&venue.venue_id, venue))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let venue_listing_instruments = self
+            .venue_listings
+            .iter()
+            .map(|listing| (&listing.listing_id, &listing.instrument_id))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        for mapping in &self.venue_identifier_mappings {
+            required(
+                mapping.status.as_str(),
+                &format!(
+                    "venue identifier mapping {}:{}:{} status",
+                    mapping.provider,
+                    mapping.provider_product,
+                    mapping.identifier_kind.as_str()
+                ),
+            )?;
+            if !venues.contains_key(&mapping.venue_id) {
+                return Err(ReferenceError::Invalid(format!(
+                    "venue identifier mapping {}:{}:{}:{} references missing venue {}",
+                    mapping.provider,
+                    mapping.provider_product,
+                    mapping.identifier_kind.as_str(),
+                    mapping.identifier,
+                    mapping.venue_id
+                )));
+            }
+        }
+        for listing in &self.venue_listings {
+            interval(
+                listing.effective_from_unix_nanos,
+                listing.effective_to_unix_nanos,
+                &format!("venue listing {}", listing.listing_id),
+            )?;
+            if !instrument_ids.contains(listing.instrument_id.as_str()) {
+                return Err(ReferenceError::Invalid(format!(
+                    "venue listing {} references missing instrument {}",
+                    listing.listing_id, listing.instrument_id
+                )));
+            }
+            let venue = venues.get(&listing.listing_venue_id).ok_or_else(|| {
+                ReferenceError::Invalid(format!(
+                    "venue listing {} references missing venue {}",
+                    listing.listing_id, listing.listing_venue_id
+                ))
+            })?;
+            if !venue.roles.contains(&VenueRole::Listing) {
+                return Err(ReferenceError::Invalid(format!(
+                    "venue listing {} references venue {} without listing role",
+                    listing.listing_id, listing.listing_venue_id
+                )));
+            }
+        }
+        for market in &self.venue_markets {
+            interval(
+                market.effective_from_unix_nanos,
+                market.effective_to_unix_nanos,
+                &format!("venue market {}", market.market_id),
+            )?;
+            if market.trading_rules.price_precision < 0
+                || market.trading_rules.quantity_precision < 0
+            {
+                return Err(ReferenceError::Invalid(format!(
+                    "venue market {} precision must not be negative",
+                    market.market_id
+                )));
+            }
+            if !instrument_ids.contains(market.instrument_id.as_str()) {
+                return Err(ReferenceError::Invalid(format!(
+                    "venue market {} references missing instrument {}",
+                    market.market_id, market.instrument_id
+                )));
+            }
+            let venue = venues.get(&market.execution_venue_id).ok_or_else(|| {
+                ReferenceError::Invalid(format!(
+                    "venue market {} references missing venue {}",
+                    market.market_id, market.execution_venue_id
+                ))
+            })?;
+            if !venue.roles.contains(&VenueRole::Execution) {
+                return Err(ReferenceError::Invalid(format!(
+                    "venue market {} references venue {} without execution role",
+                    market.market_id, market.execution_venue_id
+                )));
+            }
+            if let Some(listing_id) = market.origin_listing_id.as_ref() {
+                let listing_instrument =
+                    venue_listing_instruments.get(listing_id).ok_or_else(|| {
+                        ReferenceError::Invalid(format!(
+                            "venue market {} references missing origin listing {}",
+                            market.market_id, listing_id
+                        ))
+                    })?;
+                if *listing_instrument != &market.instrument_id {
+                    return Err(ReferenceError::Invalid(format!(
+                        "venue market {} instrument {} disagrees with origin listing {}",
+                        market.market_id, market.instrument_id, listing_id
+                    )));
+                }
+            }
+        }
+        for membership in &self.provider_catalog_memberships {
+            interval(
+                membership.effective_from_unix_nanos,
+                membership.effective_to_unix_nanos,
+                &format!(
+                    "provider catalog membership {}:{}",
+                    membership.source_id, membership.instrument_id
+                ),
+            )?;
+            if !instrument_ids.contains(membership.instrument_id.as_str()) {
+                return Err(ReferenceError::Invalid(format!(
+                    "provider catalog membership {}:{} references a missing instrument",
+                    membership.source_id, membership.instrument_id
+                )));
+            }
+        }
         Ok(())
     }
 }
@@ -1212,6 +1649,7 @@ pub(crate) fn merge_instrument(
     merge_optional!(issuer_id);
     merge_optional!(share_class);
     merge_optional!(primary_currency_asset_id);
+    merge_optional!(settlement_asset_id);
     merge_optional!(underlying_instrument_id);
     merge_optional!(expiry_unix_nanos);
     merge_optional!(strike);
@@ -1290,5 +1728,430 @@ fn merged_reference_status(
         left
     } else {
         ReferenceStatus::Inactive
+    }
+}
+
+#[cfg(test)]
+mod global_market_structure_tests {
+    #[test]
+    fn settlement_enriches_unknown_but_rejects_conflicting_assertions() {
+        let unknown = super::Instrument {
+            instrument_id: kairos_primitives::reference::InstrumentId::new(
+                "instrument:perpetual:test",
+            )
+            .unwrap(),
+            symbol: kairos_primitives::reference::Symbol::new("TEST").unwrap(),
+            instrument_type: kairos_primitives::reference::InstrumentKind::Perpetual,
+            ..Default::default()
+        };
+        let mut known = unknown.clone();
+        known.settlement_asset_id =
+            Some(kairos_primitives::reference::AssetId::new("asset:crypto:BTC").unwrap());
+        for mut values in [
+            vec![unknown.clone(), known.clone()],
+            vec![known.clone(), unknown.clone()],
+        ] {
+            super::reconcile_instruments(&mut values).unwrap();
+            assert_eq!(values.len(), 1);
+            assert_eq!(values[0].settlement_asset_id, known.settlement_asset_id);
+        }
+        let mut conflicting = known.clone();
+        conflicting.settlement_asset_id =
+            Some(kairos_primitives::reference::AssetId::new("asset:crypto:USDT").unwrap());
+        for mut values in [
+            vec![known.clone(), conflicting.clone()],
+            vec![conflicting, known],
+        ] {
+            let error = super::reconcile_instruments(&mut values).unwrap_err();
+            assert_eq!(error.code(), "reference.canonical_conflict");
+            assert!(error.to_string().contains("settlement_asset_id"));
+        }
+        let mut legacy = serde_json::to_value(&unknown).unwrap();
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("settlement_asset_id");
+        let restored: super::Instrument = serde_json::from_value(legacy).unwrap();
+        assert!(restored.settlement_asset_id.is_none());
+        let settlement_id = kairos_primitives::reference::AssetId::new("asset:crypto:BTC").unwrap();
+        let mut catalog = super::ProviderCatalog {
+            instruments: vec![super::Instrument {
+                settlement_asset_id: Some(settlement_id.clone()),
+                status: "active".into(),
+                ..restored
+            }],
+            ..Default::default()
+        };
+        assert!(
+            catalog
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("missing settlement asset")
+        );
+        catalog.assets.push(super::Asset {
+            asset_id: settlement_id,
+            code: kairos_primitives::reference::Symbol::new("BTC").unwrap(),
+            asset_class: kairos_primitives::reference::AssetClass::Crypto,
+            status: "active".into(),
+            ..Default::default()
+        });
+        catalog.validate().unwrap();
+    }
+
+    #[test]
+    fn exact_record_conflicts_preserve_typed_identity_in_both_orders() {
+        let first = super::ProviderCatalog {
+            exchanges: vec![super::Exchange {
+                exchange_id: kairos_primitives::reference::ExchangeId::new("exchange:test")
+                    .unwrap(),
+                name: "First assertion".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let mut second = first.clone();
+        second.exchanges[0].name = "Other assertion".into();
+        for pair in [[&first, &second], [&second, &first]] {
+            let error = super::ProviderCatalog::merge(pair).unwrap_err();
+            assert!(
+                matches!(&error, super::ReferenceError::CanonicalConflict { record_kind: "exchange", record_id, .. } if record_id == "exchange:test")
+            );
+            assert_eq!(error.code(), "reference.canonical_conflict");
+            assert_eq!(error.record_identity(), Some(("exchange", "exchange:test")));
+        }
+    }
+
+    use std::collections::BTreeSet;
+
+    use kairos_primitives::reference::{
+        InstrumentId, InstrumentKind, JurisdictionCode, ListingId, MarketId, Mic, ReferenceStatus,
+        Symbol, VenueId,
+    };
+
+    use super::{
+        Instrument, ListingRole, ProviderCatalog, TradingRules, Venue, VenueKind, VenueListing,
+        VenueMarket, VenueRole,
+    };
+
+    fn venue(
+        id: &str,
+        name: &str,
+        kind: VenueKind,
+        roles: &[VenueRole],
+        mic: Option<&str>,
+        jurisdiction: &str,
+    ) -> Venue {
+        Venue {
+            venue_id: VenueId::new(id).unwrap(),
+            name: name.into(),
+            venue_kind: kind,
+            roles: roles.iter().copied().collect::<BTreeSet<_>>(),
+            mic: mic.map(|value| Mic::new(value).unwrap()),
+            operating_mic: mic.map(|value| Mic::new(value).unwrap()),
+            parent_venue_id: None,
+            jurisdiction: Some(JurisdictionCode::new(jurisdiction).unwrap()),
+            status: ReferenceStatus::Active,
+        }
+    }
+
+    fn instrument(id: &str, symbol: &str, kind: InstrumentKind) -> Instrument {
+        Instrument {
+            instrument_id: InstrumentId::new(id).unwrap(),
+            symbol: Symbol::new(symbol).unwrap(),
+            instrument_type: kind,
+            status: ReferenceStatus::Active,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn underlying_validation_is_order_independent_and_rejects_invalid_references() {
+        let underlying = instrument("instrument:underlying", "BASE", InstrumentKind::Equity);
+        let mut derivative = instrument("instrument:derivative", "PERP", InstrumentKind::Perpetual);
+        derivative.underlying_instrument_id = Some(underlying.instrument_id.clone());
+        for instruments in [
+            vec![derivative.clone(), underlying.clone()],
+            vec![underlying.clone(), derivative.clone()],
+        ] {
+            ProviderCatalog {
+                instruments,
+                ..Default::default()
+            }
+            .validate()
+            .unwrap();
+        }
+        let missing = ProviderCatalog {
+            instruments: vec![derivative.clone()],
+            ..Default::default()
+        };
+        assert!(
+            missing
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("missing underlying")
+        );
+        derivative.underlying_instrument_id = Some(derivative.instrument_id.clone());
+        let self_reference = ProviderCatalog {
+            instruments: vec![underlying, derivative],
+            ..Default::default()
+        };
+        assert!(
+            self_reference
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("cannot underlie itself")
+        );
+    }
+
+    fn listing(id: &str, instrument_id: &str, venue_id: &str, symbol: &str) -> VenueListing {
+        VenueListing {
+            source_id: None,
+            listing_id: ListingId::new(id).unwrap(),
+            instrument_id: InstrumentId::new(instrument_id).unwrap(),
+            listing_venue_id: VenueId::new(venue_id).unwrap(),
+            market_segment_id: None,
+            listing_symbol: Symbol::new(symbol).unwrap(),
+            listing_role: ListingRole::Primary,
+            status: ReferenceStatus::Active,
+            effective_from_unix_nanos: 0.into(),
+            effective_to_unix_nanos: None,
+        }
+    }
+
+    fn market(
+        id: &str,
+        instrument_id: &str,
+        venue_id: &str,
+        listing_id: Option<&str>,
+        symbol: &str,
+    ) -> VenueMarket {
+        VenueMarket {
+            market_id: MarketId::new(id).unwrap(),
+            instrument_id: InstrumentId::new(instrument_id).unwrap(),
+            execution_venue_id: VenueId::new(venue_id).unwrap(),
+            origin_listing_id: listing_id.map(|value| ListingId::new(value).unwrap()),
+            market_segment_id: None,
+            venue_symbol: Some(Symbol::new(symbol).unwrap()),
+            trading_calendar_id: None,
+            trading_session_ids: Vec::new(),
+            base_asset_id: None,
+            quote_asset_id: None,
+            status: ReferenceStatus::Active,
+            trading_rules: TradingRules::default(),
+            effective_from_unix_nanos: 0.into(),
+            effective_to_unix_nanos: None,
+        }
+    }
+
+    #[test]
+    fn canonical_catalog_represents_global_listing_and_execution_distinctions() {
+        const AAPL: &str = "instrument:equity:US:AAPL:common";
+        const AAPL_LISTING: &str = "listing:xnas:equity:AAPL";
+        const TOYOTA: &str = "instrument:equity:JP:7203:common";
+        const TOYOTA_LISTING: &str = "listing:xtks:equity:7203";
+        const MOUTAI: &str = "instrument:equity:CN:600519:a";
+        const MOUTAI_LISTING: &str = "listing:xshg:equity:600519";
+        const SSE_INDEX: &str = "instrument:index:CN:000001";
+        const BTC: &str = "instrument:spot:BTC";
+        const BTC_PERP: &str = "instrument:perpetual:BTC-USDT";
+
+        let catalog = ProviderCatalog {
+            venues: vec![
+                venue(
+                    "venue:xnas",
+                    "Nasdaq",
+                    VenueKind::RegulatedExchange,
+                    &[VenueRole::Listing, VenueRole::Execution],
+                    Some("XNAS"),
+                    "US",
+                ),
+                venue(
+                    "venue:xiex",
+                    "IEX",
+                    VenueKind::RegulatedExchange,
+                    &[VenueRole::Execution],
+                    Some("IEXG"),
+                    "US",
+                ),
+                venue(
+                    "venue:ats-example",
+                    "Example ATS",
+                    VenueKind::Ats,
+                    &[VenueRole::Execution],
+                    None,
+                    "US",
+                ),
+                venue(
+                    "venue:xtks",
+                    "Tokyo Stock Exchange",
+                    VenueKind::RegulatedExchange,
+                    &[VenueRole::Listing, VenueRole::Execution],
+                    Some("XTKS"),
+                    "JP",
+                ),
+                venue(
+                    "venue:jpx-pts-example",
+                    "Example PTS",
+                    VenueKind::Pts,
+                    &[VenueRole::Execution],
+                    None,
+                    "JP",
+                ),
+                venue(
+                    "venue:xshg",
+                    "Shanghai Stock Exchange",
+                    VenueKind::RegulatedExchange,
+                    &[VenueRole::Listing, VenueRole::Execution],
+                    Some("XSHG"),
+                    "CN",
+                ),
+                venue(
+                    "venue:binance",
+                    "Binance",
+                    VenueKind::TradingPlatform,
+                    &[VenueRole::Execution],
+                    None,
+                    "SC",
+                ),
+                venue(
+                    "venue:okx",
+                    "OKX",
+                    VenueKind::TradingPlatform,
+                    &[VenueRole::Execution],
+                    None,
+                    "SC",
+                ),
+            ],
+            instruments: vec![
+                instrument(AAPL, "AAPL", InstrumentKind::Equity),
+                instrument(TOYOTA, "7203", InstrumentKind::Equity),
+                instrument(MOUTAI, "600519", InstrumentKind::Equity),
+                instrument(SSE_INDEX, "000001", InstrumentKind::Index),
+                instrument(BTC, "BTC", InstrumentKind::Spot),
+                instrument(BTC_PERP, "BTCUSDT-PERP", InstrumentKind::Perpetual),
+            ],
+            venue_listings: vec![
+                listing(AAPL_LISTING, AAPL, "venue:xnas", "AAPL"),
+                listing(TOYOTA_LISTING, TOYOTA, "venue:xtks", "7203"),
+                listing(MOUTAI_LISTING, MOUTAI, "venue:xshg", "600519"),
+            ],
+            venue_markets: vec![
+                market(
+                    "market:xnas:equity:AAPL",
+                    AAPL,
+                    "venue:xnas",
+                    Some(AAPL_LISTING),
+                    "AAPL",
+                ),
+                market(
+                    "market:xiex:equity:AAPL",
+                    AAPL,
+                    "venue:xiex",
+                    Some(AAPL_LISTING),
+                    "AAPL",
+                ),
+                market(
+                    "market:ats-example:equity:AAPL",
+                    AAPL,
+                    "venue:ats-example",
+                    Some(AAPL_LISTING),
+                    "AAPL",
+                ),
+                market(
+                    "market:xtks:equity:7203",
+                    TOYOTA,
+                    "venue:xtks",
+                    Some(TOYOTA_LISTING),
+                    "7203",
+                ),
+                market(
+                    "market:jpx-pts-example:equity:7203",
+                    TOYOTA,
+                    "venue:jpx-pts-example",
+                    Some(TOYOTA_LISTING),
+                    "7203",
+                ),
+                market(
+                    "market:xshg:equity:600519",
+                    MOUTAI,
+                    "venue:xshg",
+                    Some(MOUTAI_LISTING),
+                    "600519",
+                ),
+                market(
+                    "market:binance:spot:BTCUSDT",
+                    BTC,
+                    "venue:binance",
+                    None,
+                    "BTCUSDT",
+                ),
+                market(
+                    "market:okx:spot:BTC-USDT",
+                    BTC,
+                    "venue:okx",
+                    None,
+                    "BTC-USDT",
+                ),
+                market(
+                    "market:binance:perpetual:BTCUSDT",
+                    BTC_PERP,
+                    "venue:binance",
+                    None,
+                    "BTCUSDT",
+                ),
+            ],
+            ..Default::default()
+        };
+
+        catalog.validate().unwrap();
+        assert_eq!(
+            catalog
+                .venue_markets
+                .iter()
+                .filter(|value| value.instrument_id.as_str() == AAPL)
+                .count(),
+            3
+        );
+        assert!(
+            !catalog
+                .venues
+                .iter()
+                .find(|value| value.venue_kind == VenueKind::Ats)
+                .unwrap()
+                .roles
+                .contains(&VenueRole::Listing)
+        );
+        assert_eq!(
+            catalog
+                .venue_listings
+                .iter()
+                .filter(|value| value.instrument_id.as_str() == TOYOTA)
+                .count(),
+            1
+        );
+        assert!(
+            !catalog
+                .venues
+                .iter()
+                .any(|value| value.venue_id.as_str().contains("connect"))
+        );
+        assert!(
+            !catalog
+                .venue_listings
+                .iter()
+                .any(|value| value.instrument_id.as_str() == SSE_INDEX)
+        );
+        assert_eq!(
+            catalog
+                .venue_markets
+                .iter()
+                .filter(|value| value.instrument_id.as_str() == BTC)
+                .count(),
+            2
+        );
+        assert_ne!(BTC, BTC_PERP);
     }
 }

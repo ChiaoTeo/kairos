@@ -44,6 +44,9 @@ pub(crate) enum DirectMarketSnapshot {
 }
 
 pub(crate) struct DirectQuoteSnapshot {
+    pub(crate) bid_venue_code: Option<String>,
+    pub(crate) ask_venue_code: Option<String>,
+    pub(crate) tape: Option<u32>,
     pub(crate) symbol: String,
     pub(crate) bid_price: Option<Price>,
     pub(crate) bid_quantity: Option<Quantity>,
@@ -93,6 +96,9 @@ pub(crate) struct DirectGreeksSnapshot {
 impl From<MarketQuote> for DirectQuoteSnapshot {
     fn from(value: MarketQuote) -> Self {
         Self {
+            bid_venue_code: value.venue.bid_exchange,
+            ask_venue_code: value.venue.ask_exchange,
+            tape: value.venue.tape,
             symbol: value.symbol.to_string(),
             bid_price: value.bid_price,
             bid_quantity: value.bid_quantity,
@@ -304,9 +310,11 @@ where
                     bid_quantity: quote.bid_quantity,
                     ask_price: quote.ask_price,
                     ask_quantity: quote.ask_quantity,
-                    bid_venue_code: None,
-                    ask_venue_code: None,
-                    tape: None,
+                    bid_venue_id: None,
+                    ask_venue_id: None,
+                    bid_venue_code: quote.venue.bid_exchange,
+                    ask_venue_code: quote.venue.ask_exchange,
+                    tape: quote.venue.tape,
                     observed_at_unix_nanos: quote.observed_at_unix_nanos,
                     provider: provider.clone(),
                 })

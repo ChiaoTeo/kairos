@@ -3,6 +3,9 @@
 from importlib import import_module
 from typing import Any
 
+from .events import __all__ as _EVENT_EXPORTS
+
+
 _EXPORTS = {
     "MarketClient": (".types", "MarketClient"),
     "MarketControlClient": (".types", "MarketControlClient"),
@@ -35,9 +38,11 @@ _EXPORTS = {
     "MarketInvalidInputError": (".types", "MarketInvalidInputError"),
     "MarketInvalidEventError": (".types", "MarketInvalidEventError"),
     "MarketInvalidCurrentViewError": (".types", "MarketInvalidCurrentViewError"),
-    "MarketCurrentViewUnavailableError": (".types", "MarketCurrentViewUnavailableError"),
+    "MarketCurrentViewUnavailableError": (
+        ".types",
+        "MarketCurrentViewUnavailableError",
+    ),
 }
-from .events import __all__ as _EVENT_EXPORTS
 _EXPORTS.update({name: (".events", name) for name in _EVENT_EXPORTS})
 
 

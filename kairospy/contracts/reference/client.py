@@ -15,7 +15,7 @@ from kairospy.primitives.reference import ReferenceSourceIdRead
 from .results import (
     ReferenceCatalogCounts,
     ReferenceCatalogIntegrity,
-    ReferenceCatalogSnapshot,
+    ReferenceCatalogStatus,
     ReferenceHealthResponse,
     ReferenceOptionCoverage,
     ReferenceRuntimeStatusResponse,
@@ -26,10 +26,16 @@ if TYPE_CHECKING:
         ReferenceAsset,
         ReferenceExchange,
         ReferenceInstrument,
+        ReferenceInstrumentSearchResponse,
         ReferenceInstrumentAvailability,
         ReferenceListing,
         ReferenceMarket,
+        ReferenceMarketResolutionResponse,
+        ReferenceProviderCatalogMembership,
         ReferenceReadSession as NativeReferenceReadSession,
+        ReferenceVenueListingSearchResponse,
+        ReferenceVenueMarketSearchResponse,
+        ReferenceVenueSearchResponse,
     )
 
     ReferenceRecord: TypeAlias = (
@@ -60,9 +66,9 @@ class ReferenceReadSession:
     def close(self) -> None:
         self._native.close()
 
-    def catalog(self) -> ReferenceCatalogSnapshot:
+    def catalog(self) -> ReferenceCatalogStatus:
         status = self._native.status()
-        return ReferenceCatalogSnapshot(
+        return ReferenceCatalogStatus(
             generation=status.generation,
             event_sequence=status.event_sequence,
             catalog=ReferenceCatalogCounts(
@@ -92,6 +98,23 @@ class ReferenceReadSession:
 
     def outbox_depth(self) -> int:
         return int(self._native.outbox_depth())
+
+    def resolve_market(
+        self,
+        *,
+        market_id: str | None = None,
+        instrument_id: str | None = None,
+        execution_venue_id: str | None = None,
+        active_only: bool = True,
+    ) -> ReferenceMarketResolutionResponse:
+        """Resolve current joined market facts at this session's watermark."""
+
+        return self._native.resolve_market(
+            market_id=market_id,
+            instrument_id=instrument_id,
+            execution_venue_id=execution_venue_id,
+            active_only=active_only,
+        )
 
     def exchanges(
         self,
@@ -165,6 +188,103 @@ class ReferenceReadSession:
             expiry_to_unix_nanos=expiry_to_unix_nanos,
             option_right=option_right,
             status=status,
+            active_only=active_only,
+            limit=limit,
+            offset=offset,
+        )
+
+    def search_instruments(
+        self,
+        *,
+        query: str | None = None,
+        instrument_type: InstrumentKind | None = None,
+        active_only: bool = True,
+        limit: int = 25,
+        offset: int = 0,
+    ) -> ReferenceInstrumentSearchResponse:
+        """Search current instruments and return Reference-owned knowledge evidence."""
+
+        return self._native.search_instruments(
+            query=query,
+            instrument_type=instrument_type,
+            active_only=active_only,
+            limit=limit,
+            offset=offset,
+        )
+
+    def search_venues(
+        self,
+        *,
+        query: str | None = None,
+        venue_kind: str | None = None,
+        role: Literal["listing", "execution", "reporting"] | None = None,
+        active_only: bool = True,
+        limit: int = 25,
+        offset: int = 0,
+    ) -> ReferenceVenueSearchResponse:
+        return self._native.search_venues(
+            query=query,
+            venue_kind=venue_kind,
+            role=role,
+            active_only=active_only,
+            limit=limit,
+            offset=offset,
+        )
+
+    def search_venue_listings(
+        self,
+        *,
+        query: str | None = None,
+        instrument_id: str | None = None,
+        listing_venue_id: str | None = None,
+        active_only: bool = True,
+        limit: int = 25,
+        offset: int = 0,
+    ) -> ReferenceVenueListingSearchResponse:
+        return self._native.search_venue_listings(
+            query=query,
+            instrument_id=instrument_id,
+            listing_venue_id=listing_venue_id,
+            active_only=active_only,
+            limit=limit,
+            offset=offset,
+        )
+
+    def search_venue_markets(
+        self,
+        *,
+        query: str | None = None,
+        instrument_id: str | None = None,
+        execution_venue_id: str | None = None,
+        origin_listing_id: str | None = None,
+        instrument_kind: InstrumentKind | None = None,
+        active_only: bool = True,
+        limit: int = 25,
+        offset: int = 0,
+    ) -> ReferenceVenueMarketSearchResponse:
+        return self._native.search_venue_markets(
+            query=query,
+            instrument_id=instrument_id,
+            execution_venue_id=execution_venue_id,
+            origin_listing_id=origin_listing_id,
+            instrument_kind=instrument_kind,
+            active_only=active_only,
+            limit=limit,
+            offset=offset,
+        )
+
+    def provider_catalog_memberships(
+        self,
+        *,
+        source_ids: Sequence[str] | None = None,
+        instrument_ids: Sequence[str] | None = None,
+        active_only: bool = True,
+        limit: int = 256,
+        offset: int = 0,
+    ) -> list[ReferenceProviderCatalogMembership]:
+        return self._native.provider_catalog_memberships(
+            source_ids=_identifiers(source_ids),
+            instrument_ids=_identifiers(instrument_ids),
             active_only=active_only,
             limit=limit,
             offset=offset,
@@ -289,12 +409,12 @@ class ReferenceClient:
         return ReferenceControlClient(self.socket_path, timeout=self.timeout)
 
     @contextmanager
-    def snapshot(self) -> Iterator[ReferenceReadSession]:
+    def read_session(self) -> Iterator[ReferenceReadSession]:
         """Pin all enclosed reads to one committed Reference generation."""
 
         if self.database_path is None:
             raise RuntimeError("Reference database is not configured")
-        native = _native_module().ReferenceCatalog(self.database_path).snapshot()
+        native = _native_module().ReferenceCatalog(self.database_path).read_session()
         session = ReferenceReadSession(
             native,
             generation=int(native.generation),
@@ -363,11 +483,11 @@ class ReferenceClient:
                 "outbox_depth": 0,
                 "providers": provider_rows,
             }
-        with self.snapshot() as snapshot:
+        with self.read_session() as session:
             return {
-                "generation": snapshot.generation,
-                "event_sequence": snapshot.event_sequence,
-                "outbox_depth": snapshot.outbox_depth(),
+                "generation": session.generation,
+                "event_sequence": session.event_sequence,
+                "outbox_depth": session.outbox_depth(),
                 "providers": provider_rows,
             }
 
@@ -397,51 +517,89 @@ class ReferenceClient:
             params=[underlying],
         )
 
-    def catalog(self) -> ReferenceCatalogSnapshot:
-        with self.snapshot() as snapshot:
-            return snapshot.catalog()
+    def catalog(self) -> ReferenceCatalogStatus:
+        with self.read_session() as session:
+            return session.catalog()
 
     def option_coverage(self) -> ReferenceOptionCoverage:
-        with self.snapshot() as snapshot:
-            return snapshot.option_coverage()
+        with self.read_session() as session:
+            return session.option_coverage()
 
     def exchanges(self, **filters: Any) -> list[ReferenceExchange]:
-        with self.snapshot() as snapshot:
-            return snapshot.exchanges(**filters)
+        with self.read_session() as session:
+            return session.exchanges(**filters)
 
     def assets(self, **filters: Any) -> list[ReferenceAsset]:
-        with self.snapshot() as snapshot:
-            return snapshot.assets(**filters)
+        with self.read_session() as session:
+            return session.assets(**filters)
 
     def instruments(self, **filters: Any) -> list[ReferenceInstrument]:
-        with self.snapshot() as snapshot:
-            return snapshot.instruments(**filters)
+        with self.read_session() as session:
+            return session.instruments(**filters)
+
+    def search_instruments(self, **filters: Any) -> ReferenceInstrumentSearchResponse:
+        with self.read_session() as session:
+            return session.search_instruments(**filters)
+
+    def search_venues(self, **filters: Any) -> ReferenceVenueSearchResponse:
+        with self.read_session() as session:
+            return session.search_venues(**filters)
+
+    def search_venue_listings(
+        self, **filters: Any
+    ) -> ReferenceVenueListingSearchResponse:
+        with self.read_session() as session:
+            return session.search_venue_listings(**filters)
+
+    def search_venue_markets(
+        self, **filters: Any
+    ) -> ReferenceVenueMarketSearchResponse:
+        with self.read_session() as session:
+            return session.search_venue_markets(**filters)
+
+    def provider_catalog_memberships(
+        self, **filters: Any
+    ) -> list[ReferenceProviderCatalogMembership]:
+        with self.read_session() as session:
+            return session.provider_catalog_memberships(**filters)
 
     def instrument_availability(
         self, **filters: Any
     ) -> list[ReferenceInstrumentAvailability]:
-        with self.snapshot() as snapshot:
-            return snapshot.instrument_availability(**filters)
+        with self.read_session() as session:
+            return session.instrument_availability(**filters)
 
     def listings(self, **filters: Any) -> list[ReferenceListing]:
-        with self.snapshot() as snapshot:
-            return snapshot.listings(**filters)
+        with self.read_session() as session:
+            return session.listings(**filters)
 
     def markets(self, **filters: Any) -> list[ReferenceMarket]:
-        with self.snapshot() as snapshot:
-            return snapshot.markets(**filters)
+        with self.read_session() as session:
+            return session.markets(**filters)
 
     def collection(
         self, name: str, *, limit: int | None = None, offset: int = 0
     ) -> list[ReferenceRecord]:
-        with self.snapshot() as snapshot:
-            return snapshot.collection(name, limit=limit, offset=offset)
+        with self.read_session() as session:
+            return session.collection(name, limit=limit, offset=offset)
 
-    def resolve_market(self, **filters: object) -> ReferenceMarket:
-        markets = self.markets(**filters)
-        if len(markets) != 1:
-            raise RuntimeError("Reference market resolution is not unique")
-        return markets[0]
+    def resolve_market(
+        self,
+        *,
+        market_id: str | None = None,
+        instrument_id: str | None = None,
+        execution_venue_id: str | None = None,
+        active_only: bool = True,
+    ) -> ReferenceMarketResolutionResponse:
+        """Resolve one current v3 Market and its joined Venue facts atomically."""
+
+        with self.read_session() as session:
+            return session.resolve_market(
+                market_id=market_id,
+                instrument_id=instrument_id,
+                execution_venue_id=execution_venue_id,
+                active_only=active_only,
+            )
 
 
 def _identifiers(values: Sequence[str] | None) -> list[str] | None:

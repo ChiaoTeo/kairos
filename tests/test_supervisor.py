@@ -4,6 +4,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 from kairospy.system.apps.components.application import (
     ProcessSpec,
     ProcessState,
@@ -57,6 +59,24 @@ def test_supervisor_can_wait_for_process_owned_health(tmp_path: Path) -> None:
         result = await supervisor.start_ready(spec, timeout=2)
         assert result["actor_id"] == "test"
         await supervisor.stop("healthy")
+
+    asyncio.run(scenario())
+
+
+def test_supervisor_reaps_process_when_readiness_times_out() -> None:
+    async def scenario() -> None:
+        supervisor = ProcessSupervisor()
+        spec = ProcessSpec(
+            "never-ready",
+            (sys.executable, "-c", "import time; time.sleep(30)"),
+            stop_timeout=1,
+        )
+
+        with pytest.raises(TimeoutError, match="did not become ready"):
+            await supervisor.start_ready(spec, timeout=0.05)
+
+        assert supervisor.statuses()["never-ready"] is ProcessState.EXITED
+        await supervisor.shutdown()
 
     asyncio.run(scenario())
 

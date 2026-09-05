@@ -107,7 +107,9 @@ fn reference_facts_are_queried_without_a_market_replica() {
     let process = source("src/application/process/conflux.rs");
     let assembly = source("src/composition/launch/assembly.rs");
     assert!(process.contains(".reference_client(&reference.client_key)"));
-    assert!(process.contains(".market_catalog(&query)"));
+    assert!(process.contains(".read_session()"));
+    assert!(process.contains(".search_venue_markets(&query)"));
+    assert!(!process.contains(".market_catalog("));
     assert!(assembly.contains("install_reference_connection"));
     assert!(!assembly.contains("spawn_market_universe_watcher"));
     assert!(!assembly.contains("reference_market_snapshot"));

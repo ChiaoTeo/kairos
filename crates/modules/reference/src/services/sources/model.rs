@@ -1,5 +1,29 @@
 use crate::domain::{ProviderCatalog, SourceWorkItem};
 
+#[derive(Clone, Debug, Default, Eq, PartialEq, serde::Serialize)]
+pub(crate) struct SourceChanges {
+    pub completed_scans:
+        std::collections::BTreeSet<kairos_primitives::reference::ReferenceSourceId>,
+    pub removed_scans: std::collections::BTreeSet<kairos_primitives::reference::ReferenceSourceId>,
+}
+
+impl SourceChanges {
+    /// A pending source or one of its scoped scans must not be fetched again
+    /// before its completed staging has been finalized by the Actor.
+    pub(crate) fn affects_source(&self, source_id: &str) -> bool {
+        self.completed_scans
+            .iter()
+            .chain(&self.removed_scans)
+            .any(|scan| {
+                scan.as_str() == source_id
+                    || scan
+                        .as_str()
+                        .strip_prefix(source_id)
+                        .is_some_and(|suffix| suffix.starts_with(':'))
+            })
+    }
+}
+
 pub(crate) struct SourceUpdate {
     pub catalog: ProviderCatalog,
     pub complete: bool,
@@ -8,7 +32,7 @@ pub(crate) struct SourceUpdate {
     pub pages_total: Option<u64>,
     pub records_seen: Option<u64>,
     pub records_changed: Option<u64>,
-    pub facts_persisted: bool,
+    pub staged_changes: Option<SourceChanges>,
     pub work_item_id: Option<String>,
     pub scope_id: Option<String>,
     pub scope_kind: Option<String>,
@@ -25,7 +49,7 @@ impl Default for SourceUpdate {
             pages_total: None,
             records_seen: None,
             records_changed: None,
-            facts_persisted: false,
+            staged_changes: None,
             work_item_id: None,
             scope_id: None,
             scope_kind: None,
@@ -64,6 +88,29 @@ impl SourceUpdate {
 mod tests {
     use crate::domain::{SourceScope, SourceTickBudget, SourceWorkItem, SourceWorkReason};
     use crate::services::sources::SourceUpdate;
+
+    #[test]
+    fn pending_scans_block_only_the_owning_source() {
+        let changes = super::SourceChanges {
+            completed_scans: [kairos_primitives::reference::ReferenceSourceId::new(
+                "massive-options:SPY",
+            )
+            .unwrap()]
+            .into_iter()
+            .collect(),
+            removed_scans: [
+                kairos_primitives::reference::ReferenceSourceId::new("binance-spot").unwrap(),
+            ]
+            .into_iter()
+            .collect(),
+        };
+        assert!(changes.affects_source("massive-options"));
+        assert!(changes.affects_source("massive-options:SPY"));
+        assert!(changes.affects_source("binance-spot"));
+        assert!(!changes.affects_source("massive-option"));
+        assert!(!changes.affects_source("massive-options:SP"));
+        assert!(!changes.affects_source("binance-usdm-futures"));
+    }
 
     #[test]
     fn source_update_uses_scheduled_work_item_as_default_context() {

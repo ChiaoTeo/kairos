@@ -102,15 +102,16 @@ impl BinanceSpotRestConnection {
 }
 
 impl InstrumentCatalogQuery for BinanceSpotRestConnection {
-    async fn fetch_instruments(&mut self) -> Result<ExternalInstrumentCatalog, IntegrationError> {
+    async fn fetch_instruments(&self) -> Result<ExternalInstrumentCatalog, IntegrationError> {
         let value = self.service.public_get("/api/v3/exchangeInfo", &[]).await?;
         Ok(ExternalInstrumentCatalog {
             participant: participant(),
             instruments: market::spot_instruments(&value)?,
+            venues: Vec::new(),
         })
     }
     async fn fetch_instruments_page(
-        &mut self,
+        &self,
         cursor: Option<&str>,
         limit: usize,
     ) -> Result<ExternalInstrumentCatalogPage, IntegrationError> {
@@ -119,6 +120,7 @@ impl InstrumentCatalogQuery for BinanceSpotRestConnection {
                 catalog: ExternalInstrumentCatalog {
                     participant: participant(),
                     instruments: Vec::new(),
+                    venues: Vec::new(),
                 },
                 next_cursor: None,
                 complete: true,

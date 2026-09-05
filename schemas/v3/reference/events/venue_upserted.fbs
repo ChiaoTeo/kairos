@@ -1,0 +1,6 @@
+include "../../../v2/common/metadata.fbs";
+include "../types/venue.fbs";
+namespace kairos.reference.v3;
+table VenueUpserted { metadata:kairos.common.v2.EventMetadata (required); catalog_revision:ulong; venue:Venue (required); }
+root_type VenueUpserted;
+file_identifier "VNU3";

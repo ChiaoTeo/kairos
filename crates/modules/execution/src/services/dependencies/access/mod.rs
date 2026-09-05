@@ -12,6 +12,7 @@ pub(super) struct ExecutionDependencyAccess {
     pub(super) market_source_id: String,
     pub(super) risk: Option<kairos_risk_contract::RiskClient>,
     pub(super) risk_actor_id: Option<String>,
+    pub(super) reference: Option<kairos_reference_contract::ReferenceCatalog>,
     pub(super) dependency_watermarks: DependencyWatermarks,
     pub(super) dependency_state: DependencyStateRuntime,
 }
@@ -43,10 +44,10 @@ impl ExecutionDependencyAccess {
         self
     }
 
-    pub(super) fn from_manifest_with_reference_snapshot(
+    pub(super) fn from_manifest_with_reference_catalog(
         system: &mut kairos_conflux::ConfluxSystem,
         path: impl AsRef<Path>,
-        reference_snapshot: Option<kairos_reference_contract::ExecutionReferenceSnapshot>,
+        reference: Option<kairos_reference_contract::ReferenceCatalog>,
     ) -> Result<Self, String> {
         let manifest_path = path.as_ref().to_path_buf();
         let value: Value = serde_json::from_slice(
@@ -138,12 +139,10 @@ impl ExecutionDependencyAccess {
             .and_then(Value::as_str)
             .unwrap_or("default")
             .to_owned();
-        let reference_dependency_state = reference_snapshot.map(super::reference_dependency_state);
         let dependency_state = DependencyStateRuntime::start(
             &accounts,
             &identity,
             market_snapshot.as_deref(),
-            reference_dependency_state,
             risk.clone(),
         );
         Ok(Self {
@@ -154,6 +153,7 @@ impl ExecutionDependencyAccess {
             market_source_id,
             risk,
             risk_actor_id,
+            reference,
             dependency_watermarks: DependencyWatermarks::default(),
             dependency_state,
         })
@@ -164,10 +164,6 @@ impl ExecutionDependencyAccess {
         account_id: &str,
     ) -> Result<AccountDependencyState, String> {
         self.dependency_state.account(account_id)
-    }
-
-    pub(super) fn reference_dependency_state(&self) -> Result<ReferenceDependencyState, String> {
-        self.dependency_state.reference()
     }
 
     pub(super) fn read_market_quote(
@@ -243,7 +239,9 @@ impl ExecutionDependencyAccess {
     }
 
     pub(super) fn refresh_watermarks(&mut self) {
+        let reference = self.dependency_watermarks.reference.clone();
         self.dependency_watermarks = self.dependency_state.watermarks();
+        self.dependency_watermarks.reference = reference;
     }
 
     /// Backtest commands are serialized by the StrategyHost. Refresh the
@@ -254,31 +252,42 @@ impl ExecutionDependencyAccess {
     }
 
     pub(super) fn reference_market(
-        &self,
+        &mut self,
         market_id: Option<&str>,
         instrument_id: &str,
-    ) -> Result<Market, String> {
-        let reference_state = self.reference_dependency_state()?;
-        let markets = reference_state
-            .markets
-            .into_iter()
-            .filter(|value| {
-                market_id.map_or_else(
-                    || {
-                        value.instrument_id == instrument_id
-                            && matches!(value.status.as_str(), "active" | "trading")
-                    },
-                    |market_id| value.market_id == market_id,
-                )
+    ) -> Result<kairos_reference_contract::MarketResolution, String> {
+        let reference = self
+            .reference
+            .as_ref()
+            .ok_or_else(|| "reference catalog is not configured".to_string())?;
+        let session = reference
+            .read_session()
+            .map_err(|error| error.to_string())?;
+        let response = session
+            .resolve_market(&kairos_reference_contract::MarketResolutionQuery {
+                market_id: market_id
+                    .map(kairos_primitives::reference::MarketId::new)
+                    .transpose()
+                    .map_err(|error| error.to_string())?,
+                instrument_id: Some(
+                    kairos_primitives::reference::InstrumentId::new(instrument_id)
+                        .map_err(|error| error.to_string())?,
+                ),
+                active_only: true,
+                ..Default::default()
             })
-            .collect::<Vec<_>>();
-        let [market] = markets.as_slice() else {
+            .map_err(|error| error.to_string())?;
+        self.dependency_watermarks.reference = Some(crate::domain::SnapshotWatermark {
+            generation: response.evidence.watermark.generation,
+            event_sequence: response.evidence.watermark.event_sequence,
+        });
+        let Some(resolution) = response.resolution else {
             return Err(format!(
-                "Reference market resolution expected one match for {instrument_id}, found {}",
-                markets.len()
+                "Reference market resolution expected one match for {instrument_id}, found {}; conclusion={:?}",
+                response.candidate_count, response.evidence.conclusion
             ));
         };
-        Ok(market.clone())
+        Ok(resolution)
     }
 
     pub(super) fn health(&self, account_id: &str) -> Result<(), String> {

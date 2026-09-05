@@ -4,19 +4,16 @@ mod config;
 
 use std::path::Path;
 
-pub use config::{
-    BinanceReferenceEndpoints, BinanceReferenceProvider, CredentialedReferenceProvider,
-    PublicReferenceProvider, ReferenceConfig, ReferenceProviders, ReferenceRuntimeConfig,
-    ReferenceTickBudgetConfig,
-};
-use kairos_conflux::{AeronOutputDeclaration, BinanceCredential};
+pub use config::{ReferenceConfig, ReferenceRuntimeConfig, ReferenceTickBudgetConfig};
+use kairos_conflux::AeronOutputDeclaration;
 use kairos_credentials::CredentialStore;
 
 use crate::ReferenceApplication;
-use crate::domain::ReferenceResult;
+use crate::domain::{ReferenceResult, SourceConnectionId, SourceDesiredState, SourceScope};
 use crate::logging::events as log_events;
 use crate::services::providers::{
-    HyperliquidProduct, OkxProduct, ReferenceCredentialResolver, ReferenceProviderPlan,
+    BinanceReferenceSource, HyperliquidProduct, MassiveReferenceSource, OkxProduct,
+    ReferenceCredentialResolver, ReferenceProviderPlan, ReferenceSourceBinding,
     ReferenceSourcePlan, default_endpoint,
 };
 use crate::services::storage::catalog_store::SqlxCatalogStore;
@@ -108,149 +105,72 @@ async fn build_source_plan(
         .map(kairos_workspace::workspace::Workspace::open)
         .transpose()
         .map_err(|error| crate::domain::ReferenceError::Provider(error.to_string()))?;
-    let reference = workspace
-        .as_ref()
-        .map(ReferenceConfig::load)
-        .transpose()
-        .map_err(crate::domain::ReferenceError::Configuration)?
-        .unwrap_or_default();
+    if let Some(workspace) = workspace.as_ref() {
+        let reference_config = ReferenceConfig::load(workspace)
+            .map_err(crate::domain::ReferenceError::Configuration)?;
+        migrate_legacy_provider_configuration(workspace, &config.database, &reference_config)
+            .await?;
+    }
     let credentials_root = workspace
         .as_ref()
         .map(|workspace| workspace.existing_credentials_root())
         .transpose()
         .map_err(|error| crate::domain::ReferenceError::Provider(error.to_string()))?;
-    let credential_resolver = credentials_root
+    let mut credential_resolver = credentials_root
         .as_ref()
         .map(|root| CredentialStore::load(root).map(ReferenceCredentialResolver::from_store))
         .transpose()
         .map_err(|error| crate::domain::ReferenceError::Provider(error.to_string()))?
         .unwrap_or_default();
-
-    let mut providers = Vec::new();
-    let configured = reference.providers;
-    if configured.binance.enabled {
-        let credential_id = configured.binance.credential_id;
-        let endpoints = configured.binance.endpoints;
-        providers.push(ReferenceProviderPlan::BinanceSpot {
-            key: "reference-binance-spot".into(),
-            endpoint: configured_endpoint(endpoints.spot, default_endpoint("binance-spot")),
-        });
-        providers.push(ReferenceProviderPlan::BinanceUsdM {
-            key: "reference-binance-usdm".into(),
-            endpoint: configured_endpoint(
-                endpoints.usd_m_futures,
-                default_endpoint("binance-usdm-futures"),
-            ),
-        });
-        providers.push(ReferenceProviderPlan::BinanceCoinM {
-            key: "reference-binance-coinm".into(),
-            endpoint: configured_endpoint(
-                endpoints.coin_m_futures,
-                default_endpoint("binance-coinm-futures"),
-            ),
-        });
-        providers.push(ReferenceProviderPlan::BinanceOptions {
-            key: "reference-binance-options".into(),
-            endpoint: configured_endpoint(endpoints.options, default_endpoint("binance-options")),
-        });
-        if let Some(credential_id) = credential_id.as_deref() {
-            let credential = load_required_credential(
-                credentials_root.as_deref(),
-                "binance",
-                Some(credential_id),
-                "Binance equity",
-            )?;
-            providers.push(ReferenceProviderPlan::BinanceEquity {
-                key: "reference-binance-stocks".into(),
-                endpoint: configured_endpoint(endpoints.equity, default_endpoint("binance-equity")),
-                credential: BinanceCredential {
-                    principal_id: credential_id.into(),
-                    api_key: secrecy::SecretString::new(credential.0.into()),
-                    secret: credential.1,
-                },
-            });
-        }
-    }
-    if configured.okx.enabled {
-        let endpoint = configured.okx.endpoint;
-        for product in [
-            OkxProduct::Spot,
-            OkxProduct::Margin,
-            OkxProduct::Swap,
-            OkxProduct::Futures,
-            OkxProduct::Option,
-        ] {
-            let source_id = product.source_id();
-            providers.push(ReferenceProviderPlan::Okx {
-                key: format!("reference-{source_id}"),
-                source_id: source_id.into(),
-                product,
-                endpoint: configured_endpoint(endpoint.clone(), default_endpoint(source_id)),
-            });
-        }
-    }
-    if configured.hyperliquid.enabled {
-        let endpoint = configured.hyperliquid.endpoint;
-        for product in [HyperliquidProduct::Spot, HyperliquidProduct::Perpetual] {
-            providers.push(ReferenceProviderPlan::Hyperliquid {
-                key: format!("reference-{}", product.source_id()),
-                product,
-                endpoint: configured_endpoint(endpoint.clone(), default_endpoint("hyperliquid")),
-            });
-        }
-    }
-    if configured.massive.enabled {
-        let mut credential_id = configured.massive.credential_id;
-        let mut endpoint = configured.massive.endpoint;
-        if let Some(connection_id) = configured.massive.connection_id.as_deref() {
-            let workspace = workspace.as_ref().ok_or_else(|| {
-                crate::domain::ReferenceError::Provider(
-                    "Reference connection binding requires a Workspace".into(),
-                )
-            })?;
-            let root = kairos_integration::composition::ProviderConnectionProfile::canonical_root(
+    if let Some(workspace) = workspace.as_ref() {
+        credential_resolver = credential_resolver.load_connection_profiles(
+            &kairos_integration::composition::ProviderConnectionProfile::canonical_root(
                 workspace.root(),
-            );
-            let connection = kairos_integration::composition::ProviderConnectionProfile::load(
-                &root,
-                connection_id,
-            )
-            .map_err(crate::domain::ReferenceError::Provider)?;
-            connection
-                .require("massive", None, "reference-catalog")
-                .map_err(crate::domain::ReferenceError::Provider)?;
-            endpoint = Some(
-                connection
-                    .endpoint_for("reference-catalog", None)
-                    .ok_or_else(|| {
-                        crate::domain::ReferenceError::Provider(
-                            "validated Reference connection has no REST endpoint".into(),
-                        )
-                    })?
-                    .to_owned(),
-            );
-            credential_id = Some(connection.credential_id);
-        }
-        let credential = load_required_credential(
-            credentials_root.as_deref(),
-            "massive",
-            credential_id.as_deref(),
-            "Massive",
+            ),
         )?;
-        let endpoint = configured_endpoint(endpoint, default_endpoint("massive"));
-        providers.push(ReferenceProviderPlan::MassiveEquity {
-            key: "reference-massive-equity".into(),
-            api_key: credential.0.clone(),
-            endpoint: endpoint.clone(),
-            sync_store: SqlxProviderSyncStore::open(&config.database).await?,
+    }
+
+    // Public, credential-free catalog sources are first-start seeds. Each
+    // product is an independent persisted source definition; there is no
+    // provider-wide Reference switch that implicitly enables other products.
+    let mut providers = vec![
+        ReferenceProviderPlan::BinanceSpot {
+            key: "reference-binance-spot".into(),
+            endpoint: default_endpoint("binance-spot").into(),
+        },
+        ReferenceProviderPlan::BinanceUsdM {
+            key: "reference-binance-usdm".into(),
+            endpoint: default_endpoint("binance-usdm-futures").into(),
+        },
+        ReferenceProviderPlan::BinanceCoinM {
+            key: "reference-binance-coinm".into(),
+            endpoint: default_endpoint("binance-coinm-futures").into(),
+        },
+        ReferenceProviderPlan::BinanceOptions {
+            key: "reference-binance-options".into(),
+            endpoint: default_endpoint("binance-options").into(),
+        },
+    ];
+    for product in [
+        OkxProduct::Spot,
+        OkxProduct::Margin,
+        OkxProduct::Swap,
+        OkxProduct::Futures,
+        OkxProduct::Option,
+    ] {
+        let source_id = product.source_id();
+        providers.push(ReferenceProviderPlan::Okx {
+            key: format!("reference-{source_id}"),
+            source_id: source_id.into(),
+            product,
+            endpoint: default_endpoint(source_id).into(),
         });
-        let mut sync_store = SqlxProviderSyncStore::open(&config.database).await?;
-        let underlyings = sync_store.option_underlyings("massive-options").await?;
-        providers.push(ReferenceProviderPlan::MassiveOptions {
-            api_key: credential.0,
-            endpoint,
-            sync_store,
-            underlyings,
+    }
+    for product in [HyperliquidProduct::Spot, HyperliquidProduct::Perpetual] {
+        providers.push(ReferenceProviderPlan::Hyperliquid {
+            key: format!("reference-{}", product.source_id()),
+            product,
+            endpoint: default_endpoint("hyperliquid").into(),
         });
     }
 
@@ -262,35 +182,258 @@ async fn build_source_plan(
     ))
 }
 
-fn configured_endpoint(endpoint: Option<String>, default: &str) -> String {
-    endpoint
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| default.to_owned())
+async fn migrate_legacy_provider_configuration(
+    workspace: &kairos_workspace::Workspace,
+    database: &Path,
+    config: &ReferenceConfig,
+) -> ReferenceResult<()> {
+    if config.legacy_providers().is_empty() {
+        return Ok(());
+    }
+    let mut store = SqlxProviderSyncStore::open(database).await?;
+    let existing = store
+        .source_definitions()
+        .await?
+        .into_iter()
+        .map(|definition| definition.source_id.to_string())
+        .collect::<std::collections::BTreeSet<_>>();
+    let connection_root =
+        kairos_integration::composition::ProviderConnectionProfile::canonical_root(
+            workspace.root(),
+        );
+    std::fs::create_dir_all(&connection_root)
+        .map_err(|error| crate::domain::ReferenceError::Configuration(error.to_string()))?;
+
+    for (provider, legacy) in config.legacy_providers() {
+        let bindings = legacy_bindings(provider, legacy)?;
+        let connection_path = connection_root.join(format!("{provider}.toml"));
+        let wants_profile = connection_path.is_file()
+            || legacy.endpoint.is_some()
+            || legacy.credential_id.is_some();
+        if wants_profile && !connection_path.exists() {
+            if bindings.iter().any(|binding| binding.requires_credential())
+                && legacy.credential_id.as_deref().is_none_or(str::is_empty)
+                && legacy.enabled
+            {
+                return Err(crate::domain::ReferenceError::Configuration(format!(
+                    "legacy Reference provider {provider} requires credential_id before it can migrate to an Integration connection profile"
+                )));
+            }
+            let endpoint = legacy
+                .endpoint
+                .as_deref()
+                .unwrap_or_else(|| legacy_default_endpoint(provider));
+            if !endpoint.starts_with("https://") {
+                return Err(crate::domain::ReferenceError::Configuration(format!(
+                    "legacy Reference provider {provider} endpoint must use HTTPS before migration"
+                )));
+            }
+            let products = bindings
+                .iter()
+                .map(|binding| binding.product())
+                .collect::<Vec<_>>();
+            write_legacy_connection_profile(
+                &connection_path,
+                provider,
+                endpoint,
+                legacy.credential_id.as_deref().unwrap_or("public"),
+                legacy.enabled,
+                &products,
+            )?;
+        }
+
+        let connection_id = wants_profile
+            .then(|| SourceConnectionId::new(provider))
+            .transpose()?;
+        for binding in bindings {
+            if existing.contains(binding.source_id()) {
+                continue;
+            }
+            let definition = binding.definition(
+                SourceScope::global(),
+                if legacy.enabled {
+                    SourceDesiredState::Enabled
+                } else {
+                    SourceDesiredState::Disabled
+                },
+                connection_id.clone(),
+            )?;
+            store.upsert_source_definition(definition).await?;
+        }
+    }
+    Ok(())
 }
 
-fn load_required_credential(
-    credentials_root: Option<&Path>,
+fn legacy_bindings(
     provider: &str,
-    credential_id: Option<&str>,
-    label: &str,
-) -> ReferenceResult<(String, secrecy::SecretString)> {
-    let credential = credentials_root
-        .map(CredentialStore::load)
-        .transpose()
-        .map_err(|error| crate::domain::ReferenceError::Provider(error.to_string()))?
-        .and_then(|store| store.find_provider(provider, credential_id).cloned())
-        .ok_or_else(|| {
-            crate::domain::ReferenceError::Provider(format!(
-                "Reference {label} source is enabled but its credential is missing"
+    legacy: &config::LegacyReferenceProviderConfig,
+) -> ReferenceResult<Vec<ReferenceSourceBinding>> {
+    let selected = legacy
+        .product
+        .iter()
+        .chain(legacy.products.iter())
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let selected = if selected.is_empty() {
+        match provider {
+            "binance" | "okx" => vec!["spot"],
+            "hyperliquid" => vec!["perpetual"],
+            "massive" => vec!["equity"],
+            _ => Vec::new(),
+        }
+    } else {
+        selected
+    };
+    selected
+        .into_iter()
+        .map(|product| match (provider, product) {
+            ("binance", "spot") => Ok(ReferenceSourceBinding::Binance(
+                BinanceReferenceSource::Spot,
+            )),
+            ("binance", "usd-m-futures") => Ok(ReferenceSourceBinding::Binance(
+                BinanceReferenceSource::UsdMFutures,
+            )),
+            ("binance", "coin-m-futures") => Ok(ReferenceSourceBinding::Binance(
+                BinanceReferenceSource::CoinMFutures,
+            )),
+            ("binance", "options") => Ok(ReferenceSourceBinding::Binance(
+                BinanceReferenceSource::Options,
+            )),
+            ("binance", "equity") => Ok(ReferenceSourceBinding::Binance(
+                BinanceReferenceSource::Equity,
+            )),
+            ("okx", "spot") => Ok(ReferenceSourceBinding::Okx(OkxProduct::Spot)),
+            ("okx", "margin") => Ok(ReferenceSourceBinding::Okx(OkxProduct::Margin)),
+            ("okx", "swap") => Ok(ReferenceSourceBinding::Okx(OkxProduct::Swap)),
+            ("okx", "futures") => Ok(ReferenceSourceBinding::Okx(OkxProduct::Futures)),
+            ("okx", "options") => Ok(ReferenceSourceBinding::Okx(OkxProduct::Option)),
+            ("hyperliquid", "spot") => Ok(ReferenceSourceBinding::Hyperliquid(
+                HyperliquidProduct::Spot,
+            )),
+            ("hyperliquid", "perpetual") => Ok(ReferenceSourceBinding::Hyperliquid(
+                HyperliquidProduct::Perpetual,
+            )),
+            ("massive", "equity") => Ok(ReferenceSourceBinding::Massive(
+                MassiveReferenceSource::Equity,
+            )),
+            ("massive", "options") => Ok(ReferenceSourceBinding::Massive(
+                MassiveReferenceSource::Options,
+            )),
+            _ => Err(crate::domain::ReferenceError::Configuration(format!(
+                "unsupported legacy Reference provider product {provider}/{product}"
+            ))),
+        })
+        .collect()
+}
+
+fn legacy_default_endpoint(provider: &str) -> &'static str {
+    match provider {
+        "binance" => "https://api.binance.com",
+        "okx" => "https://www.okx.com",
+        "hyperliquid" => "https://api.hyperliquid.xyz/info",
+        "massive" => "https://api.massive.com",
+        _ => "",
+    }
+}
+
+fn write_legacy_connection_profile(
+    path: &Path,
+    provider: &str,
+    endpoint: &str,
+    credential_id: &str,
+    enabled: bool,
+    products: &[&str],
+) -> ReferenceResult<()> {
+    fn quoted(value: &str) -> String {
+        serde_json::to_string(value).expect("JSON string encoding is infallible")
+    }
+    let products = products
+        .iter()
+        .map(|value| quoted(value))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let content = format!(
+        "version = 2\n\n[connection]\nconnection_id = {}\nprovider = {}\nenvironment = \"production\"\nendpoint = {}\ncredential_id = {}\nenabled = {enabled}\nproducts = [{products}]\npurposes = [\"reference-catalog\"]\n",
+        quoted(provider),
+        quoted(provider),
+        quoted(endpoint),
+        quoted(credential_id),
+    );
+    let temporary = path.with_extension(format!("toml.migrate-{}", std::process::id()));
+    std::fs::write(&temporary, content)
+        .and_then(|_| std::fs::rename(&temporary, path))
+        .map_err(|error| {
+            crate::domain::ReferenceError::Configuration(format!(
+                "failed to migrate legacy Reference provider profile {}: {error}",
+                path.display()
             ))
-        })?;
-    let api_key = credential.api_key_value().ok_or_else(|| {
-        crate::domain::ReferenceError::Provider(format!(
-            "Reference {label} source is enabled but its API key is missing"
-        ))
-    })?;
-    let secret = credential.value("api_secret").cloned().unwrap_or_default();
-    Ok((api_key, secret))
+        })
+}
+
+#[cfg(test)]
+mod legacy_migration_tests {
+    use super::{ReferenceConfig, migrate_legacy_provider_configuration};
+    use crate::services::storage::provider_sync_store::SqlxProviderSyncStore;
+
+    #[tokio::test]
+    async fn legacy_provider_migration_materializes_one_selected_product_without_overwrite() {
+        let directory = tempfile::tempdir().unwrap();
+        let workspace = kairos_workspace::Workspace::init(directory.path(), "legacy").unwrap();
+        let config: ReferenceConfig = toml::from_str(
+            r#"
+            [providers.massive]
+            enabled = true
+            credential_id = "massive-readonly"
+            endpoint = "https://reference.example.test"
+            product = "equity"
+            "#,
+        )
+        .unwrap();
+        config.validate().unwrap();
+        let database = directory.path().join("data/reference.sqlite");
+
+        migrate_legacy_provider_configuration(&workspace, &database, &config)
+            .await
+            .unwrap();
+
+        let profile = kairos_integration::composition::ProviderConnectionProfile::load(
+            &kairos_integration::composition::ProviderConnectionProfile::canonical_root(
+                workspace.root(),
+            ),
+            "massive",
+        )
+        .unwrap();
+        assert_eq!(profile.products, ["equity"]);
+        assert_eq!(profile.purposes, ["reference-catalog"]);
+        let mut store = SqlxProviderSyncStore::open(&database).await.unwrap();
+        let definitions = store.source_definitions().await.unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].source_id.as_str(), "massive-equity");
+        assert_eq!(definitions[0].connection_id.as_deref(), Some("massive"));
+
+        std::fs::write(
+            kairos_integration::composition::ProviderConnectionProfile::canonical_root(
+                workspace.root(),
+            )
+            .join("massive.toml"),
+            "preserved",
+        )
+        .unwrap();
+        migrate_legacy_provider_configuration(&workspace, &database, &config)
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(
+                kairos_integration::composition::ProviderConnectionProfile::canonical_root(
+                    workspace.root(),
+                )
+                .join("massive.toml")
+            )
+            .unwrap(),
+            "preserved"
+        );
+        assert_eq!(store.source_definitions().await.unwrap().len(), 1);
+    }
 }
 
 pub fn declare_reference_changes_output(

@@ -54,14 +54,14 @@ pub(crate) trait ReferenceSource: Send {
 
     async fn advance_workflow_with_connections(
         &mut self,
-        _connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        _connections: &kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<ProviderCatalog> {
         self.advance_workflow().await
     }
 
     async fn advance_workflow_with_budget(
         &mut self,
-        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        connections: &kairos_conflux::ConnectionCollections<'_>,
         _budget: SourceTickBudget,
     ) -> ReferenceResult<ProviderCatalog> {
         self.advance_workflow_with_connections(connections).await
@@ -76,7 +76,7 @@ pub(crate) trait ReferenceSource: Send {
 
     async fn fetch_catalog_with_connections(
         &mut self,
-        _connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        _connections: &kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<ProviderCatalog> {
         self.fetch_catalog().await
     }
@@ -87,14 +87,14 @@ pub(crate) trait ReferenceSource: Send {
 
     async fn fetch_catalog_step_with_connections(
         &mut self,
-        _connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        _connections: &kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<SourceUpdate> {
         self.fetch_catalog_step().await
     }
 
     async fn fetch_catalog_step_with_budget(
         &mut self,
-        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        connections: &kairos_conflux::ConnectionCollections<'_>,
         _budget: SourceTickBudget,
     ) -> ReferenceResult<SourceUpdate> {
         self.fetch_catalog_step_with_connections(connections).await
@@ -106,14 +106,14 @@ pub(crate) trait ReferenceSource: Send {
 
     async fn advance_workflow_step_with_connections(
         &mut self,
-        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        connections: &kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<SourceUpdate> {
         self.fetch_catalog_step_with_connections(connections).await
     }
 
     async fn advance_workflow_step_with_budget(
         &mut self,
-        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        connections: &kairos_conflux::ConnectionCollections<'_>,
         budget: SourceTickBudget,
     ) -> ReferenceResult<SourceUpdate> {
         self.fetch_catalog_step_with_budget(connections, budget)
@@ -132,7 +132,7 @@ pub(crate) trait ReferenceSource: Send {
     async fn advance_source_with_connections(
         &mut self,
         source_id: &str,
-        _connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        _connections: &kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<Option<ProviderCatalog>> {
         self.advance_one_source(source_id).await
     }
@@ -140,7 +140,7 @@ pub(crate) trait ReferenceSource: Send {
     async fn advance_source_with_budget(
         &mut self,
         source_id: &str,
-        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        connections: &kairos_conflux::ConnectionCollections<'_>,
         _budget: SourceTickBudget,
     ) -> ReferenceResult<Option<ProviderCatalog>> {
         self.advance_source_with_connections(source_id, connections)
@@ -213,5 +213,17 @@ pub(crate) trait ReferenceSource: Send {
         Vec::new()
     }
 
-    fn mark_promotions_committed(&mut self) {}
+    fn mark_sources_committed(&mut self, _committed: &super::SourceChanges) {}
+
+    async fn note_rejected_scans(
+        &mut self,
+        _rejected: &super::SourceChanges,
+        _error: &crate::domain::ReferenceError,
+    ) -> ReferenceResult<()> {
+        Ok(())
+    }
+
+    fn staged_source_changes(&self) -> super::SourceChanges {
+        super::SourceChanges::default()
+    }
 }

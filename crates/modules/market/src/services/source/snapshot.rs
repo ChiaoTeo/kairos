@@ -19,6 +19,32 @@ pub(crate) fn quote_event(quote: kairos_conflux::MarketQuote) -> MarketEvent {
         last_sequence: None,
         sequence: None,
         observed_at_unix_nanos: quote.observed_at_unix_nanos,
-        venue: kairos_conflux::MarketVenueEvidence::default(),
+        venue: quote.venue,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn snapshot_quote_preserves_both_sides_without_inventing_trade_evidence() {
+        let venue = kairos_conflux::MarketVenueEvidence {
+            bid_exchange: Some("19".into()),
+            ask_exchange: Some("11".into()),
+            tape: Some(3),
+            ..Default::default()
+        };
+        let quote = kairos_conflux::MarketQuote {
+            symbol: kairos_primitives::integration::ParticipantSymbol::new("AAPL").unwrap(),
+            bid_price: None,
+            bid_quantity: None,
+            ask_price: None,
+            ask_quantity: None,
+            last_price: None,
+            observed_at_unix_nanos: 7.into(),
+            venue: venue.clone(),
+        };
+        let event = super::quote_event(quote);
+        assert_eq!(event.venue, venue);
+        assert!(event.venue.trade_exchange.is_none());
     }
 }

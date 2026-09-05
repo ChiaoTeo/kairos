@@ -24,16 +24,14 @@ impl std::ops::DerefMut for OrderAdmissionContext {
 }
 
 impl OrderAdmissionContext {
-    pub(super) fn from_manifest_with_reference_snapshot(
+    pub(super) fn from_manifest_with_reference_catalog(
         system: &mut kairos_conflux::ConfluxSystem,
         path: impl AsRef<Path>,
-        reference_snapshot: Option<kairos_reference_contract::ExecutionReferenceSnapshot>,
-    ) -> Result<Self, String> {
+        reference: Option<kairos_reference_contract::ReferenceCatalog>,
+    ) -> Result<Self, AdmissionError> {
         Ok(Self {
-            dependencies: ExecutionDependencyAccess::from_manifest_with_reference_snapshot(
-                system,
-                path,
-                reference_snapshot,
+            dependencies: ExecutionDependencyAccess::from_manifest_with_reference_catalog(
+                system, path, reference,
             )?,
             allow_backtest_without_reference_state: false,
             allow_backtest_without_account_state: false,
@@ -63,9 +61,10 @@ impl OrderAdmissionContext {
 
     pub(super) fn risk_reservations_adapter(
         &self,
-    ) -> Result<SocketExecutionRiskReservations, String> {
+    ) -> Result<SocketExecutionRiskReservations, AdmissionError> {
         self.dependencies
             .risk_reservations_adapter(self.reservation_ttl_nanos, false)
+            .map_err(Into::into)
     }
 }
 
@@ -77,16 +76,17 @@ impl OrderAdmissionContext {
     pub(super) fn commitment_observation(
         &self,
         account_id: &str,
-    ) -> Result<AccountCommitmentObservation, String> {
+    ) -> Result<AccountCommitmentObservation, AdmissionError> {
         self.account_dependency_state(account_id)
             .map(|value| value.commitment_observation)
+            .map_err(Into::into)
     }
 
     pub(super) fn validate_order(
         &mut self,
         request: &SubmitOrder,
         active_commitments: &[OrderCommitment],
-    ) -> Result<OrderCommitment, String> {
+    ) -> Result<OrderCommitment, AdmissionError> {
         self.health(request.account_id.as_str())?;
         if request.quantity.mantissa() <= 0 {
             return Err("order quantity must be positive".into());
@@ -106,13 +106,13 @@ impl OrderAdmissionContext {
             validate_reference_rules(
                 &crate::domain::ExecutionMarketRules {
                     tradable: matches!(
-                        market.status.as_str().to_ascii_lowercase().as_str(),
+                        market.market.status.as_str().to_ascii_lowercase().as_str(),
                         "active" | "listed" | "trading"
                     ),
-                    minimum_quantity: market.minimum_quantity,
-                    quantity_tick: market.quantity_tick,
-                    price_tick: market.price_tick,
-                    minimum_notional: market.minimum_notional,
+                    minimum_quantity: market.market.trading_rules.minimum_quantity,
+                    quantity_tick: market.market.trading_rules.quantity_tick,
+                    price_tick: market.market.trading_rules.price_tick,
+                    minimum_notional: market.market.trading_rules.minimum_notional,
                 },
                 request,
             )?;
@@ -129,29 +129,32 @@ impl OrderAdmissionContext {
             .as_deref()
             .map(kairos_primitives::reference::Currency::new)
             .transpose()
-            .map_err(|error| error.to_string())?;
+            .map_err(|source| AdmissionError::InvalidSemantic {
+                field: "quote_asset",
+                source,
+            })?;
         let asset = match request.side {
             OrderSide::Buy => reference_market
                 .as_ref()
-                .and_then(|market| market.quote_asset_id.as_ref())
+                .and_then(|resolution| resolution.market.quote_asset_id.as_ref())
                 .map(reference_asset_currency)
                 .transpose()?
                 .or_else(|| configured_quote_asset.clone()),
             OrderSide::Sell => reference_market
                 .as_ref()
-                .and_then(|market| market.base_asset_id.as_ref())
+                .and_then(|resolution| resolution.market.base_asset_id.as_ref())
                 .map(reference_asset_currency)
                 .transpose()?,
         };
         let settlement_asset = reference_market
             .as_ref()
-            .and_then(|market| market.quote_asset_id.as_ref())
+            .and_then(|resolution| resolution.market.quote_asset_id.as_ref())
             .map(reference_asset_currency)
             .transpose()?
             .or(configured_quote_asset.clone());
-        let derivative_reduce = reference_market.as_ref().is_some_and(|market| {
+        let derivative_reduce = reference_market.as_ref().is_some_and(|resolution| {
             matches!(
-                market.instrument_kind,
+                resolution.instrument.instrument_type,
                 InstrumentKind::Perpetual | InstrumentKind::Future | InstrumentKind::Option
             ) && request.options.reduce_only == Some(true)
         });
@@ -162,36 +165,38 @@ impl OrderAdmissionContext {
                 active_commitments,
             )?
         } else if !self.allow_backtest_without_account_state {
-            let asset = asset.ok_or_else(|| {
-                "Reference must define the order commitment asset; symbol suffix inference is forbidden"
-                    .to_string()
+            let asset = asset.ok_or(AdmissionError::Validation {
+                rule: "Reference must define the order commitment asset; symbol suffix inference is forbidden",
             })?;
             if request.side == OrderSide::Buy {
                 if let (Some(configured), Some(reference)) = (
                     request.options.quote_asset.as_deref(),
-                    reference_market.as_ref().and_then(|market| {
-                        market
+                    reference_market.as_ref().and_then(|resolution| {
+                        resolution
+                            .market
                             .quote_asset_id
                             .as_ref()
                             .and_then(|value| value.as_str().rsplit(':').next())
                     }),
                 ) {
                     if !configured.eq_ignore_ascii_case(reference) {
-                        return Err(format!(
-                            "configured quote asset {configured} disagrees with Reference {reference}"
+                        return Err(AdmissionError::validation_context(
+                            "configured quote asset disagrees with Reference",
+                            format!("configured={configured}, reference={reference}"),
                         ));
                     }
                 }
             }
             let quantity = decimal_quantity(request.quantity)?;
             let needed = if request.side == OrderSide::Buy {
-                let price_cap = request.limit_price.ok_or_else(|| {
-                    "buy order requires an explicit price cap for commitment calculation"
-                        .to_string()
+                let price_cap = request.limit_price.ok_or(AdmissionError::Validation {
+                    rule: "buy order requires an explicit price cap for commitment calculation",
                 })?;
                 quantity
                     .checked_mul(decimal_price(price_cap)?)
-                    .ok_or_else(|| "order notional overflow".to_string())?
+                    .ok_or(AdmissionError::Overflow {
+                        operation: "order notional",
+                    })?
             } else {
                 quantity
             };
@@ -205,12 +210,18 @@ impl OrderAdmissionContext {
                         && commitment.resource == commitment_resource
                 })
                 .try_fold(Decimal::ZERO, |total, commitment| {
-                    total
-                        .checked_add(decimal_money(commitment.amount)?)
-                        .ok_or_else(|| "order commitment total overflow".to_string())
+                    total.checked_add(decimal_money(commitment.amount)?).ok_or(
+                        AdmissionError::Overflow {
+                            operation: "order commitment total",
+                        },
+                    )
                 })?;
-            let available = find_available(balances, &asset)?
-                .ok_or_else(|| format!("no available balance for {asset}"))?;
+            let available = find_available(balances, &asset)?.ok_or_else(|| {
+                AdmissionError::validation_context(
+                    "available balance is missing",
+                    asset.to_string(),
+                )
+            })?;
             ensure_available_capacity(available, committed, needed, &asset)?;
             OrderCommitment::new(
                 request.order_id.clone(),
@@ -240,8 +251,12 @@ impl OrderAdmissionContext {
                 request.instrument_id.clone(),
                 request.side,
                 CommitmentResource::Instrument(request.instrument_id.clone()),
-                Money::new(request.quantity.mantissa(), request.quantity.scale())
-                    .map_err(|error| error.to_string())?,
+                Money::new(request.quantity.mantissa(), request.quantity.scale()).map_err(
+                    |source| AdmissionError::InvalidSemantic {
+                        field: "commitment_amount",
+                        source,
+                    },
+                )?,
                 request.quantity,
                 CommitmentBasis::SimulationQuantity,
                 request
@@ -264,17 +279,22 @@ impl OrderAdmissionContext {
                             && value.instrument_id == request.instrument_id.as_str()
                             && value.status.consumes_capacity()
                     })
-                    .try_fold(Decimal::ZERO, |total, value| -> Result<Decimal, String> {
-                        let quantity = decimal_quantity(value.remaining_quantity)?;
-                        let signed = if value.side == OrderSide::Buy {
-                            quantity
-                        } else {
-                            -quantity
-                        };
-                        total
-                            .checked_add(signed)
-                            .ok_or_else(|| "maker inventory reservation overflow".to_string())
-                    })?;
+                    .try_fold(
+                        Decimal::ZERO,
+                        |total, value| -> Result<Decimal, AdmissionError> {
+                            let quantity = decimal_quantity(value.remaining_quantity)?;
+                            let signed = if value.side == OrderSide::Buy {
+                                quantity
+                            } else {
+                                -quantity
+                            };
+                            total
+                                .checked_add(signed)
+                                .ok_or_else(|| AdmissionError::Overflow {
+                                    operation: "maker inventory reservation",
+                                })
+                        },
+                    )?;
                 let request_quantity = decimal_quantity(request.quantity)?;
                 let signed_request = if request.side == OrderSide::Buy {
                     request_quantity
@@ -284,11 +304,13 @@ impl OrderAdmissionContext {
                 let resulting_inventory = current
                     .checked_add(reserved)
                     .and_then(|value| value.checked_add(signed_request))
-                    .ok_or_else(|| "maker inventory calculation overflow".to_string())?;
+                    .ok_or(AdmissionError::Overflow {
+                        operation: "maker inventory calculation",
+                    })?;
                 if resulting_inventory.abs() > decimal_signed_quantity(max_inventory)?.abs() {
-                    return Err(format!(
-                        "maker inventory guard exceeded for {}: resulting_inventory={}, limit={}",
-                        request.instrument_id, resulting_inventory, max_inventory
+                    return Err(AdmissionError::validation_context(
+                        "maker inventory guard exceeded",
+                        request.instrument_id.to_string(),
                     ));
                 }
             }
@@ -298,10 +320,11 @@ impl OrderAdmissionContext {
                 .read_market_quote(request.market_id.as_deref(), request.instrument_id.as_str())?
                 .map(|(quote, _)| vec![quote])
                 .unwrap_or_default();
-            let business_time = request
-                .submitted_at_unix_nanos
-                .map(UnixNanos::get)
-                .ok_or_else(|| "order admission requires explicit business time".to_string())?;
+            let business_time = request.submitted_at_unix_nanos.map(UnixNanos::get).ok_or(
+                AdmissionError::Validation {
+                    rule: "order admission requires explicit business time",
+                },
+            )?;
             validate_quote_freshness(std::slice::from_ref(request), &quotes, business_time, None)?;
         }
         Ok(commitment)
@@ -311,7 +334,7 @@ impl OrderAdmissionContext {
         &mut self,
         request: &SubmitOrder,
         route: &crate::domain::ExecutionRouteCandidate,
-    ) -> Result<RiskAuthorizationContext, String> {
+    ) -> Result<RiskAuthorizationContext, AdmissionError> {
         let reference_market = self.reference_market(
             request.market_id.as_ref().map(MarketId::as_str),
             request.instrument_id.as_str(),
@@ -346,7 +369,7 @@ impl OrderAdmissionContext {
             available_margin,
             initial_margin_rate_bps: route.initial_margin_rate_bps,
             margin_rule_id: route.margin_rule_id.clone(),
-            exchange_id: Some(reference_market.exchange_id),
+            exchange_id: legacy_exchange_id_for_risk(&reference_market.venue)?,
             funding_broker: Some(route.broker_id.clone()),
             funding_segment: Some(request.segment_key.clone()),
             collateral_asset: request
@@ -355,7 +378,10 @@ impl OrderAdmissionContext {
                 .as_deref()
                 .map(kairos_primitives::reference::Currency::new)
                 .transpose()
-                .map_err(|error| error.to_string())?,
+                .map_err(|source| AdmissionError::InvalidSemantic {
+                    field: "collateral_asset",
+                    source,
+                })?,
         })
     }
 }
@@ -364,14 +390,16 @@ fn closeable_position_commitment(
     request: &SubmitOrder,
     positions: &[AccountPositionFact],
     active_commitments: &[OrderCommitment],
-) -> Result<OrderCommitment, String> {
+) -> Result<OrderCommitment, AdmissionError> {
     let position_side = request
         .options
         .position_side
         .as_deref()
         .unwrap_or("net")
         .parse::<PositionSide>()
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| {
+            AdmissionError::validation_context("invalid position side", error.to_string())
+        })?;
     let position = positions
         .iter()
         .find(|position| {
@@ -382,18 +410,23 @@ fn closeable_position_commitment(
                 && position.position_side == position_side
         })
         .ok_or_else(|| {
-            format!(
-                "no closeable {} position for {} on segment {}",
-                position_side.as_str(),
-                request.instrument_id,
-                request.segment_key
+            AdmissionError::validation_context(
+                "no closeable position",
+                format!(
+                    "no closeable {} position for {} on segment {}",
+                    position_side.as_str(),
+                    request.instrument_id,
+                    request.segment_key
+                ),
             )
         })?;
     let signed_position = Decimal::try_new(
         position.quantity.mantissa(),
         u32::from(position.quantity.scale()),
     )
-    .map_err(|_| "position quantity cannot be represented as a decimal".to_string())?;
+    .map_err(|_| AdmissionError::DecimalRepresentation {
+        value_kind: "position quantity",
+    })?;
     let closeable = match position_side {
         PositionSide::Net if request.side == OrderSide::Sell && signed_position > Decimal::ZERO => {
             signed_position
@@ -404,21 +437,16 @@ fn closeable_position_commitment(
         PositionSide::Long if request.side == OrderSide::Sell => signed_position.abs(),
         PositionSide::Short if request.side == OrderSide::Buy => signed_position.abs(),
         _ => {
-            return Err(format!(
-                "{} order cannot reduce the observed {} position",
-                match request.side {
-                    OrderSide::Buy => "buy",
-                    OrderSide::Sell => "sell",
-                },
-                position_side.as_str()
+            return Err(AdmissionError::validation_context(
+                "order side cannot reduce the observed position",
+                request.instrument_id.to_string(),
             ));
         },
     };
     if closeable <= Decimal::ZERO {
-        return Err(format!(
-            "observed {} position for {} has no closeable quantity",
-            position_side.as_str(),
-            request.instrument_id
+        return Err(AdmissionError::validation_context(
+            "observed position has no closeable quantity",
+            request.instrument_id.to_string(),
         ));
     }
     let resource = CommitmentResource::CloseablePosition {
@@ -436,20 +464,20 @@ fn closeable_position_commitment(
         .try_fold(Decimal::ZERO, |total, commitment| {
             total
                 .checked_add(decimal_quantity(commitment.remaining_quantity)?)
-                .ok_or_else(|| "closeable-position commitment total overflow".to_string())
+                .ok_or(AdmissionError::Overflow {
+                    operation: "closeable-position commitment total",
+                })
         })?;
     let requested = decimal_quantity(request.quantity)?;
     let required = committed
         .checked_add(requested)
-        .ok_or_else(|| "closeable-position requirement overflow".to_string())?;
+        .ok_or(AdmissionError::Overflow {
+            operation: "closeable-position requirement",
+        })?;
     if required > closeable {
-        return Err(format!(
-            "insufficient closeable {} position for {}: observed={}, committed={}, requested={}",
-            position_side.as_str(),
-            request.instrument_id,
-            closeable,
-            committed,
-            requested
+        return Err(AdmissionError::validation_context(
+            "insufficient closeable position",
+            request.instrument_id.to_string(),
         ));
     }
     OrderCommitment::new(
@@ -459,26 +487,60 @@ fn closeable_position_commitment(
         request.instrument_id.clone(),
         request.side,
         resource,
-        Money::new(request.quantity.mantissa(), request.quantity.scale())
-            .map_err(|error| error.to_string())?,
+        Money::new(request.quantity.mantissa(), request.quantity.scale()).map_err(|source| {
+            AdmissionError::InvalidSemantic {
+                field: "commitment_amount",
+                source,
+            }
+        })?,
         request.quantity,
         CommitmentBasis::CloseablePositionQuantity,
         request
             .submitted_at_unix_nanos
             .unwrap_or_else(|| UnixNanos::new(0)),
     )
+    .map_err(Into::into)
+}
+
+fn legacy_exchange_id_for_risk(
+    venue: &kairos_reference_contract::Venue,
+) -> Result<Option<kairos_primitives::reference::ExchangeId>, AdmissionError> {
+    if venue.venue_kind != kairos_reference_contract::VenueKind::RegulatedExchange {
+        return Ok(None);
+    }
+    let key = venue
+        .venue_id
+        .as_str()
+        .strip_prefix("venue:")
+        .unwrap_or(venue.venue_id.as_str());
+    kairos_primitives::reference::ExchangeId::new(format!("exchange:{key}"))
+        .map(Some)
+        .map_err(|source| AdmissionError::InvalidSemantic {
+            field: "risk_exchange_id_compatibility",
+            source,
+        })
 }
 
 fn reference_asset_currency(
     asset_id: &kairos_primitives::reference::AssetId,
-) -> Result<kairos_primitives::reference::Currency, String> {
+) -> Result<kairos_primitives::reference::Currency, AdmissionError> {
     let code = asset_id
         .as_str()
         .rsplit(':')
         .next()
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| format!("Reference asset {} has no currency code", asset_id))?;
-    kairos_primitives::reference::Currency::new(code).map_err(|error| error.to_string())
+        .ok_or_else(|| {
+            AdmissionError::validation_context(
+                "Reference asset has no currency code",
+                asset_id.to_string(),
+            )
+        })?;
+    kairos_primitives::reference::Currency::new(code).map_err(|source| {
+        AdmissionError::InvalidSemantic {
+            field: "reference_asset_currency",
+            source,
+        }
+    })
 }
 
 #[cfg(test)]
@@ -541,7 +603,13 @@ mod tests {
             &[first],
         )
         .unwrap_err();
-        assert!(error.contains("insufficient closeable net position"));
+        assert!(matches!(
+            error,
+            AdmissionError::ValidationContext {
+                rule: "insufficient closeable position",
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -553,6 +621,12 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(error.contains("cannot reduce the observed net position"));
+        assert!(matches!(
+            error,
+            AdmissionError::ValidationContext {
+                rule: "order side cannot reduce the observed position",
+                ..
+            }
+        ));
     }
 }

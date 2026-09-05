@@ -75,22 +75,17 @@ pub fn build_execution_host(
         },
     )?;
 
-    let reference_key = "execution-reference";
     let reference_database = config.reference_connection.database.clone();
-    let mut reference_snapshot = None;
+    let mut reference_catalog = None;
     if reference_database.exists() {
-        system
-            .install_reference_connection(reference_key, config.reference_connection, 1)
-            .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
-        let snapshot = system
-            .reference_execution_snapshot(reference_key)
-            .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+        let catalog = kairos_reference_contract::ReferenceCatalog::open(&reference_database)?;
+        let page = load_reference_route_facts(&catalog, &config.route_options)?;
         for (access_id, participant_instrument) in
-            load_execution_routes_from_reference_markets(&snapshot, &config.route_options)?
+            load_execution_routes_from_reference_markets(&page, &config.route_options)?
         {
             application.configure_execution_route(access_id, participant_instrument);
         }
-        reference_snapshot = Some(snapshot);
+        reference_catalog = Some(catalog);
     } else if !config.simulated {
         return Err(format!(
             "live Execution requires canonical Reference markets: {}",
@@ -103,7 +98,7 @@ pub fn build_execution_host(
         &mut application,
         &mut system,
         &config.manifest_path,
-        reference_snapshot,
+        reference_catalog,
         config.backtest,
         128,
     )?;
@@ -165,4 +160,106 @@ pub fn build_execution_host(
         methods,
         JsonRpcRuntimeConfig::uds(config.socket_path),
     ))
+}
+
+fn load_reference_route_facts(
+    catalog: &kairos_reference_contract::ReferenceCatalog,
+    configured_routes: &[crate::composition::connections::ExecutionConnectionOptions],
+) -> Result<kairos_reference_contract::MarketSearchResponse, Box<dyn std::error::Error>> {
+    let session = catalog.read_session()?;
+    let mut response = kairos_reference_contract::MarketSearchResponse {
+        evidence: kairos_reference_contract::ReferenceQueryEvidence {
+            watermark: session.watermark(),
+            conclusion: kairos_reference_contract::ReferenceKnowledgeConclusion::Found,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    for route in configured_routes {
+        if route.instruments.is_empty() {
+            let venue_key = route.broker_id.trim().to_ascii_lowercase();
+            let venue_key = if venue_key == "okex" {
+                "okx"
+            } else {
+                &venue_key
+            };
+            if !matches!(venue_key, "binance" | "okx" | "hyperliquid") {
+                return Err(format!(
+                    "Execution route {} must declare instrument addresses; broker {} is not a canonical execution venue",
+                    route.route_id, route.broker_id
+                )
+                .into());
+            }
+            let page = session.search_venue_markets(
+                &kairos_reference_contract::VenueMarketSearchQuery {
+                    execution_venue_id: Some(kairos_primitives::reference::VenueId::new(format!(
+                        "venue:{venue_key}"
+                    ))?),
+                    active_only: true,
+                    page: kairos_reference_contract::ReferencePage {
+                        limit: Some(1_000),
+                        offset: 0,
+                    },
+                    ..Default::default()
+                },
+            )?;
+            if page.next_cursor.is_some() {
+                return Err(format!(
+                    "Execution route {} resolves to more than 1000 Reference markets; declare explicit instrument addresses",
+                    route.route_id
+                )
+                .into());
+            }
+            response.markets.extend(page.markets);
+            response.instruments.extend(page.instruments);
+            continue;
+        }
+        for address in &route.instruments {
+            let instruments =
+                session.search_instruments(&kairos_reference_contract::InstrumentSearchQuery {
+                    instrument_ids: Some(vec![kairos_primitives::reference::InstrumentId::new(
+                        &address.instrument_id,
+                    )?]),
+                    page: kairos_reference_contract::ReferencePage {
+                        limit: Some(2),
+                        offset: 0,
+                    },
+                    ..Default::default()
+                })?;
+            let [instrument] = instruments.instruments.as_slice() else {
+                return Err(format!(
+                    "Execution route {} references missing or ambiguous instrument {}",
+                    route.route_id, address.instrument_id
+                )
+                .into());
+            };
+            response
+                .instruments
+                .insert(instrument.instrument_id.clone(), instrument.clone());
+            if let Some(market_id) = address.destination_market_id.as_deref() {
+                let resolved =
+                    session.resolve_market(&kairos_reference_contract::MarketResolutionQuery {
+                        market_id: Some(kairos_primitives::reference::MarketId::new(market_id)?),
+                        instrument_id: Some(instrument.instrument_id.clone()),
+                        active_only: true,
+                        ..Default::default()
+                    })?;
+                let Some(resolution) = resolved.resolution else {
+                    return Err(format!(
+                        "Execution route {} destination {market_id} is not a usable Reference market; conclusion={:?}",
+                        route.route_id, resolved.evidence.conclusion
+                    )
+                    .into());
+                };
+                response.markets.push(resolution.market);
+            }
+        }
+    }
+    response
+        .markets
+        .sort_by(|left, right| left.market_id.cmp(&right.market_id));
+    response
+        .markets
+        .dedup_by(|left, right| left.market_id == right.market_id);
+    Ok(response)
 }

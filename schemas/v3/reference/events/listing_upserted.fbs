@@ -1,0 +1,6 @@
+include "../../../v2/common/metadata.fbs";
+include "../types/listing.fbs";
+namespace kairos.reference.v3;
+table ListingUpserted { metadata:kairos.common.v2.EventMetadata (required); catalog_revision:ulong; listing:Listing (required); }
+root_type ListingUpserted;
+file_identifier "LSU3";

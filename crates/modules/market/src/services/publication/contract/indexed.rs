@@ -356,6 +356,14 @@ fn encode_quote(
         .ask_venue_code
         .as_deref()
         .map(|value| builder.create_string(value));
+    let bid_venue_id = value
+        .bid_venue_id
+        .as_ref()
+        .map(|value| builder.create_string(value.as_str()));
+    let ask_venue_id = value
+        .ask_venue_id
+        .as_ref()
+        .map(|value| builder.create_string(value.as_str()));
     let quote = market_fb::Quote::create(
         &mut builder,
         &market_fb::QuoteArgs {
@@ -367,6 +375,8 @@ fn encode_quote(
             bid_quantity: bid_quantity.as_ref(),
             ask_price: ask_price.as_ref(),
             ask_quantity: ask_quantity.as_ref(),
+            bid_venue_id,
+            ask_venue_id,
             bid_venue_code,
             ask_venue_code,
             tape: value.tape.unwrap_or_default(),
@@ -947,6 +957,8 @@ mod tests {
             bid_quantity: Some("1".parse().unwrap()),
             ask_price: None,
             ask_quantity: None,
+            bid_venue_id: None,
+            ask_venue_id: None,
             bid_venue_code: None,
             ask_venue_code: None,
             tape: None,
@@ -968,6 +980,33 @@ mod tests {
         match mutation {
             IndexedMutation::Put { value, .. } => value,
             other => panic!("expected current-view put, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn quote_current_retains_independent_optional_venue_identities() {
+        for known in [false, true] {
+            let mut change = quote_change(1, "market:btc", "100");
+            let Some(MarketViewUpdate::Observation(MarketObservation::Quote(quote))) =
+                change.view.as_mut()
+            else {
+                panic!("expected quote fixture");
+            };
+            quote.bid_venue_id =
+                known.then(|| kairos_primitives::reference::VenueId::new("venue:bid").unwrap());
+            quote.ask_venue_id =
+                known.then(|| kairos_primitives::reference::VenueId::new("venue:ask").unwrap());
+            quote.bid_venue_code = Some("19".into());
+            quote.ask_venue_code = Some("11".into());
+            let batch = encode_latest_change_views(&[change], &BTreeMap::new())
+                .unwrap()
+                .unwrap();
+            let root =
+                market_fb::root_as_market_quote_current(put_value(&batch.mutations[0])).unwrap();
+            assert_eq!(root.value().bid_venue_id(), known.then_some("venue:bid"));
+            assert_eq!(root.value().ask_venue_id(), known.then_some("venue:ask"));
+            assert_eq!(root.value().bid_venue_code(), Some("19"));
+            assert_eq!(root.value().ask_venue_code(), Some("11"));
         }
     }
 

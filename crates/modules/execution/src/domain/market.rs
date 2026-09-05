@@ -18,8 +18,27 @@ pub enum ObservationScope {
     },
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum MarketObservationError {
+    #[error("consolidated observation scope must match the observation instrument")]
+    ScopeInstrumentMismatch {
+        scoped_instrument_id: InstrumentId,
+        observation_instrument_id: InstrumentId,
+    },
+}
+
+impl MarketObservationError {
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::ScopeInstrumentMismatch { .. } => {
+                "execution.market_observation.scope_instrument_mismatch"
+            },
+        }
+    }
+}
+
 impl ObservationScope {
-    pub fn validate_for(&self, instrument_id: &InstrumentId) -> Result<(), String> {
+    pub fn validate_for(&self, instrument_id: &InstrumentId) -> Result<(), MarketObservationError> {
         match self {
             Self::Market { .. } => Ok(()),
             Self::Consolidated {
@@ -32,9 +51,13 @@ impl ObservationScope {
             {
                 Ok(())
             },
-            Self::Consolidated { .. } => {
-                Err("consolidated observation scope must match the observation instrument".into())
-            },
+            Self::Consolidated {
+                instrument_id: scoped,
+                ..
+            } => Err(MarketObservationError::ScopeInstrumentMismatch {
+                scoped_instrument_id: scoped.clone(),
+                observation_instrument_id: instrument_id.clone(),
+            }),
         }
     }
 }
@@ -82,4 +105,33 @@ pub enum MarketObservation {
     Bar(Bar),
     TradeBar(TradeBar),
     QuoteBar(QuoteBar),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn consolidated_scope_mismatch_is_structured() {
+        let scoped = InstrumentId::new("ETH-USDT").unwrap();
+        let observed = InstrumentId::new("BTC-USDT").unwrap();
+        let error = ObservationScope::Consolidated {
+            instrument_id: scoped.clone(),
+            network_id: None,
+        }
+        .validate_for(&observed)
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            MarketObservationError::ScopeInstrumentMismatch {
+                scoped_instrument_id: scoped,
+                observation_instrument_id: observed,
+            }
+        );
+        assert_eq!(
+            error.code(),
+            "execution.market_observation.scope_instrument_mismatch"
+        );
+    }
 }

@@ -114,64 +114,123 @@ fn encoder_emits_typed_market_upsert_without_json_adapter() {
 }
 
 #[test]
-fn consumer_snapshots_are_active_bounded_and_keep_one_watermark() {
-    let active_market = Market {
-        market_id: kairos_primitives::reference::MarketId::new("market:active").unwrap(),
-        instrument_id: kairos_primitives::reference::InstrumentId::new("instrument:active")
-            .unwrap(),
+fn encoder_emits_typed_v3_venue_and_market_events() {
+    use std::collections::BTreeSet;
+
+    let context = EncodeContext::event(
+        "reference-actor",
+        1,
+        InstanceIdentity::default(),
+        8,
+        "reference:event:8",
+        4,
+    )
+    .unwrap();
+    let venue = kairos_reference_contract::Venue {
+        venue_id: kairos_primitives::reference::VenueId::new("venue:xiex").unwrap(),
+        name: "IEX".into(),
+        venue_kind: kairos_reference_contract::VenueKind::RegulatedExchange,
+        roles: BTreeSet::from([kairos_reference_contract::VenueRole::Execution]),
+        mic: Some(kairos_primitives::reference::Mic::new("IEXG").unwrap()),
+        operating_mic: Some(kairos_primitives::reference::Mic::new("IEXG").unwrap()),
+        parent_venue_id: None,
+        jurisdiction: Some(kairos_primitives::reference::JurisdictionCode::new("US").unwrap()),
         status: kairos_primitives::reference::ReferenceStatus::Active,
-        ..Default::default()
     };
-    let inactive_market = Market {
-        market_id: kairos_primitives::reference::MarketId::new("market:inactive").unwrap(),
-        instrument_id: kairos_primitives::reference::InstrumentId::new("instrument:inactive")
-            .unwrap(),
-        status: kairos_primitives::reference::ReferenceStatus::Inactive,
-        ..Default::default()
-    };
-    let snapshot = kairos_reference_contract::ReferenceCatalogSnapshot {
-        actor_id: kairos_primitives::runtime::ActorId::new("reference-actor").unwrap(),
-        generation: 9.into(),
-        event_sequence: 14.into(),
-        instruments: vec![
-            kairos_reference_contract::Instrument {
-                instrument_id: kairos_primitives::reference::InstrumentId::new("instrument:active")
-                    .unwrap(),
-                status: kairos_primitives::reference::ReferenceStatus::Active,
-                ..Default::default()
-            },
-            kairos_reference_contract::Instrument {
-                instrument_id: kairos_primitives::reference::InstrumentId::new(
-                    "instrument:inactive",
-                )
-                .unwrap(),
-                status: kairos_primitives::reference::ReferenceStatus::Inactive,
-                ..Default::default()
-            },
-        ],
-        markets: vec![active_market, inactive_market],
-        provider_health: vec![kairos_reference_contract::ProviderHealthState {
-            provider_id: kairos_primitives::market::Provider::new("test").unwrap(),
-            status: String::new(),
-            message: None,
-            updated_at_unix_nanos: 0_u64.into(),
-        }],
-        option_underlyings: vec![kairos_primitives::reference::InstrumentId::new("SPY").unwrap()],
-        lifecycle_events: vec![kairos_reference_contract::LifecycleEntry::default()],
-        ..Default::default()
-    };
+    let payload = ReferenceEncoder::venue_upserted(&venue, &context, 42).unwrap();
+    match decode_event(&payload).unwrap() {
+        ReferenceEvent::VenueUpserted(event) => {
+            assert_eq!(event.catalog_revision(), 4);
+            assert_eq!(event.venue().venue_id(), "venue:xiex");
+            assert_eq!(event.venue().roles().len(), 1);
+        },
+        _ => panic!("unexpected Reference event variant"),
+    }
 
-    let market = snapshot.for_market();
-    assert_eq!(
-        (market.generation, market.event_sequence),
-        (9.into(), 14.into())
-    );
-    assert_eq!(market.markets.len(), 1);
-    assert_eq!(market.instruments.len(), 1);
-    let execution = snapshot.for_execution();
-    assert_eq!(execution.markets.len(), 1);
+    let market = kairos_reference_contract::VenueMarket {
+        market_id: kairos_primitives::reference::MarketId::new("market:xiex:equity:AAPL").unwrap(),
+        instrument_id: kairos_primitives::reference::InstrumentId::new(
+            "instrument:equity:US:AAPL:common",
+        )
+        .unwrap(),
+        execution_venue_id: venue.venue_id,
+        origin_listing_id: Some(
+            kairos_primitives::reference::ListingId::new("listing:xnas:equity:AAPL").unwrap(),
+        ),
+        market_segment_id: None,
+        venue_symbol: Some(kairos_primitives::reference::Symbol::new("AAPL").unwrap()),
+        trading_calendar_id: None,
+        trading_session_ids: Vec::new(),
+        base_asset_id: None,
+        quote_asset_id: None,
+        status: kairos_primitives::reference::ReferenceStatus::Active,
+        trading_rules: kairos_reference_contract::TradingRules::default(),
+        effective_from_unix_nanos: 0.into(),
+        effective_to_unix_nanos: None,
+    };
+    let payload = ReferenceEncoder::venue_market_upserted(&market, &context, 43).unwrap();
+    match decode_event(&payload).unwrap() {
+        ReferenceEvent::VenueMarketUpserted(event) => {
+            assert_eq!(event.market().execution_venue_id(), "venue:xiex");
+            assert_eq!(
+                event.market().origin_listing_id(),
+                Some("listing:xnas:equity:AAPL")
+            );
+        },
+        _ => panic!("unexpected Reference event variant"),
+    }
+}
 
-    let account = snapshot.for_account();
-    assert_eq!(account.markets.len(), 1);
-    assert_eq!(account.instruments.len(), 1);
+#[test]
+fn encoder_emits_coverage_conclusion_changing_event() {
+    use std::collections::BTreeSet;
+
+    let context = EncodeContext::event(
+        "reference-actor",
+        1,
+        InstanceIdentity::default(),
+        9,
+        "reference:event:9",
+        5,
+    )
+    .unwrap();
+    let coverage = kairos_reference_contract::ReferenceCoverage {
+        coverage_id: kairos_primitives::reference::ReferenceCoverageId::new(
+            "coverage:binance-spot",
+        )
+        .unwrap(),
+        source_id: kairos_primitives::reference::ReferenceSourceId::new("binance-spot").unwrap(),
+        fact_kinds: BTreeSet::from([
+            kairos_reference_contract::ReferenceFactKind::Instrument,
+            kairos_reference_contract::ReferenceFactKind::Market,
+        ]),
+        scope: kairos_reference_contract::ReferenceCoverageScope::ProviderCatalog {
+            binding: kairos_reference_contract::ReferenceSourceBinding::Binance(
+                kairos_reference_contract::BinanceReferenceSource::Spot,
+            ),
+        },
+        completeness: kairos_reference_contract::CoverageCompleteness::CompleteForDeclaredScope,
+        state: kairos_reference_contract::CoverageState::Usable,
+        generation: Some(5.into()),
+        event_sequence: Some(9.into()),
+        last_attempt_unix_nanos: Some(40.into()),
+        last_success_unix_nanos: Some(41.into()),
+        stale_after_unix_nanos: Some(100.into()),
+        has_last_known_good: true,
+    };
+    let payload = ReferenceEncoder::coverage_state_changed(
+        &coverage,
+        kairos_reference_contract::CoverageState::Scanning,
+        &context,
+        42,
+    )
+    .unwrap();
+    match decode_event(&payload).unwrap() {
+        ReferenceEvent::CoverageStateChanged(event) => {
+            assert_eq!(event.coverage().source_id(), "binance-spot");
+            assert_eq!(event.previous_state().variant_name(), Some("SCANNING"));
+            assert_eq!(event.coverage().state().variant_name(), Some("USABLE"));
+        },
+        _ => panic!("unexpected Reference event variant"),
+    }
 }

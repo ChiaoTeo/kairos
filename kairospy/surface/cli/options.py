@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from contextvars import ContextVar
+from contextvars import ContextVar, Token
 import json
 
 from prettytable import PrettyTable
@@ -20,13 +20,13 @@ _command_output: ContextVar[OutputFormat | None] = ContextVar(
 )
 
 
-def set_command_output(output: OutputFormat) -> object:
+def set_command_output(output: OutputFormat) -> Token[OutputFormat | None]:
     """Set the effective format for one CLI invocation."""
     return _command_output.set(output)
 
 
-def reset_command_output(token: object) -> None:
-    _command_output.reset(token)  # type: ignore[arg-type]
+def reset_command_output(token: Token[OutputFormat | None]) -> None:
+    _command_output.reset(token)
 
 
 def effective_output(output: OutputFormat) -> OutputFormat:

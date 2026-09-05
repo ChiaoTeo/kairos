@@ -6,7 +6,7 @@ impl ExecutionActor {
         request: &ExecutionFillReport,
         occurred_at: u64,
         applied_at: u64,
-    ) -> Result<FillTransition, String> {
+    ) -> Result<FillTransition, OrderError> {
         if let Some(existing) = self
             .fills
             .iter()
@@ -33,7 +33,9 @@ impl ExecutionActor {
                 let order = self
                     .orders
                     .get_mut(request.order_id.as_str())
-                    .ok_or_else(|| "duplicate fill references unknown order".to_string())?;
+                    .ok_or_else(|| OrderError::UnknownOrder {
+                        order_id: request.order_id.to_string(),
+                    })?;
                 let cursor_changed = request.source_cursor.as_ref().is_some_and(|incoming| {
                     if order
                         .last_order_fact_cursor
@@ -54,24 +56,42 @@ impl ExecutionActor {
             return Ok(FillTransition::Conflict(existing));
         }
         if request.quantity.mantissa() <= 0 || request.price.mantissa() <= 0 {
-            return Err("fill quantity and price must be positive".into());
+            return Err(OrderError::InvalidFill {
+                fill_id: request.fill_id.to_string(),
+                failure: crate::domain::FillValidationFailure::QuantityOrPriceNotPositive,
+            });
         }
         if request.fee.mantissa() < 0 {
-            return Err("fill fee cannot be negative".into());
+            return Err(OrderError::InvalidFill {
+                fill_id: request.fill_id.to_string(),
+                failure: crate::domain::FillValidationFailure::FeeNegative,
+            });
         }
         let current = self
             .order(request.order_id.as_str())
             .cloned()
-            .ok_or_else(|| "unknown order".to_string())?;
+            .ok_or_else(|| OrderError::UnknownOrder {
+                order_id: request.order_id.to_string(),
+            })?;
         if current.status.terminal() {
-            return Err("order is terminal".into());
+            return Err(OrderError::TerminalOrder {
+                order_id: current.order_id,
+                status: current.status,
+            });
         }
         let filled = current
             .filled_quantity
             .checked_add(request.quantity)
-            .map_err(|error| error.to_string())?;
+            .map_err(|source| OrderError::Arithmetic {
+                operation: "cumulative fill addition",
+                source,
+            })?;
         if filled > current.quantity {
-            return Err("cumulative fill exceeds order quantity".into());
+            return Err(OrderError::FillExceedsQuantity {
+                order_id: current.order_id.clone(),
+                cumulative: filled,
+                ordered: current.quantity,
+            });
         }
         let mut order = current;
         if let Some(remote_order_id) = request.remote_order_id.as_ref() {
@@ -80,11 +100,11 @@ impl ExecutionActor {
                 .as_ref()
                 .is_some_and(|current| current != remote_order_id)
             {
-                return Err(format!(
-                    "fill remote order identity {} conflicts with order identity {}",
-                    remote_order_id,
-                    order.remote_order_id.as_deref().unwrap_or_default()
-                ));
+                return Err(OrderError::RemoteIdentityConflict {
+                    order_id: order.order_id,
+                    expected: order.remote_order_id,
+                    actual: remote_order_id.clone(),
+                });
             }
             order.remote_order_id = Some(remote_order_id.clone());
         }

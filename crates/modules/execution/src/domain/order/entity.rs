@@ -123,17 +123,20 @@ impl ExecutionOrder {
         order_type: OrderType,
         quantity: Quantity,
         at_unix_nanos: u64,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, OrderError> {
         let order = Self {
-            order_id: OrderId::new(order_id).map_err(|error| error.to_string())?,
+            order_id: OrderId::new(order_id)
+                .map_err(|source| OrderError::invalid_semantic("order_id", source))?,
             plan_id: None,
             leg_id: None,
             intent_id: None,
             strategy_id: None,
-            account_id: AccountId::new(account_id).map_err(|error| error.to_string())?,
-            segment_key: SegmentKey::new(segment_key.into()).map_err(|error| error.to_string())?,
+            account_id: AccountId::new(account_id)
+                .map_err(|source| OrderError::invalid_semantic("account_id", source))?,
+            segment_key: SegmentKey::new(segment_key.into())
+                .map_err(|source| OrderError::invalid_semantic("segment_key", source))?,
             instrument_id: InstrumentId::new(instrument_id.into())
-                .map_err(|error| error.to_string())?,
+                .map_err(|source| OrderError::invalid_semantic("instrument_id", source))?,
             market_id: None,
             execution_route_id: None,
             selected_route: None,
@@ -152,8 +155,64 @@ impl ExecutionOrder {
             reason: String::new(),
         };
         if quantity <= Quantity::ZERO {
-            return Err("execution order quantity must be positive".into());
+            return Err(OrderError::QuantityNotPositive { quantity });
         }
         Ok(order)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+
+    use super::*;
+
+    #[test]
+    fn rejects_non_positive_quantity_with_a_stable_error_category() {
+        let error = ExecutionOrder::new(
+            "order-a",
+            "account-a",
+            "spot",
+            "BTC-USDT",
+            OrderSide::Buy,
+            OrderType::Market,
+            Quantity::ZERO,
+            1,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            OrderError::QuantityNotPositive {
+                quantity: Quantity::ZERO,
+            }
+        );
+        assert_eq!(error.code(), "execution.order.quantity_not_positive");
+        assert!(error.source().is_none());
+    }
+
+    #[test]
+    fn preserves_the_semantic_constructor_as_the_error_source() {
+        let error = ExecutionOrder::new(
+            "",
+            "account-a",
+            "spot",
+            "BTC-USDT",
+            OrderSide::Buy,
+            OrderType::Market,
+            Quantity::new(1, 0).unwrap(),
+            1,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            OrderError::InvalidSemantic {
+                field: "order_id",
+                ..
+            }
+        ));
+        assert_eq!(error.code(), "execution.order.invalid_semantic");
+        assert!(error.source().is_some());
     }
 }

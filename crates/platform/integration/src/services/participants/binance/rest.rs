@@ -68,7 +68,7 @@ impl RestService {
     }
 
     pub(crate) async fn public_get(
-        &mut self,
+        &self,
         path: &str,
         params: &[(&str, String)],
     ) -> Result<Value, IntegrationError> {
@@ -82,7 +82,7 @@ impl RestService {
 
     /// API-key authenticated query which does not require a signature.
     pub(crate) async fn keyed_get(
-        &mut self,
+        &self,
         path: &str,
         params: &[(&str, String)],
     ) -> Result<Value, IntegrationError> {

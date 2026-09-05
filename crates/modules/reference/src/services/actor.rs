@@ -4,7 +4,7 @@ use kairos_primitives::runtime::{ActorId, InstanceIdentity};
 use tracing::info;
 
 use super::providers::ReferenceSourcePlan;
-use super::publication::{EncodedPublication, encode_publications};
+use super::publication::{EncodedPublication, encode_coverage_publications, encode_publications};
 #[cfg(not(test))]
 use super::sources::ConfiguredReferenceSource;
 use super::sources::ReferenceSource;
@@ -55,6 +55,12 @@ pub struct CatalogMetadata {
     pub legacy_exchange_listing_id_count: usize,
     pub option_listing_count: usize,
     pub option_market_count: usize,
+    pub coverage_count: usize,
+    pub usable_coverage_count: usize,
+    pub stale_coverage_count: usize,
+    pub unavailable_coverage_count: usize,
+    pub unresolved_venue_mapping_count: usize,
+    pub v2_unprojectable_market_count: usize,
 }
 
 impl From<&ReferenceCatalog> for CatalogMetadata {
@@ -95,12 +101,29 @@ impl From<&ReferenceCatalog> for CatalogMetadata {
                 .values()
                 .filter(|market| market.instrument_kind.as_str() == "option")
                 .count(),
+            coverage_count: 0,
+            usable_coverage_count: 0,
+            stale_coverage_count: 0,
+            unavailable_coverage_count: 0,
+            unresolved_venue_mapping_count: 0,
+            v2_unprojectable_market_count: catalog
+                .venue_markets
+                .values()
+                .filter(|market| {
+                    catalog
+                        .venues
+                        .get(&market.execution_venue_id)
+                        .is_none_or(|venue| {
+                            venue.venue_kind != crate::domain::VenueKind::RegulatedExchange
+                        })
+                })
+                .count(),
         }
     }
 }
 
-impl From<super::storage::catalog_store::CatalogRuntimeSnapshot> for CatalogMetadata {
-    fn from(state: super::storage::catalog_store::CatalogRuntimeSnapshot) -> Self {
+impl From<super::storage::catalog_store::CatalogRuntimeMetrics> for CatalogMetadata {
+    fn from(state: super::storage::catalog_store::CatalogRuntimeMetrics) -> Self {
         Self {
             generation: state.generation,
             event_sequence: state.event_sequence,
@@ -117,6 +140,12 @@ impl From<super::storage::catalog_store::CatalogRuntimeSnapshot> for CatalogMeta
             legacy_exchange_listing_id_count: state.legacy_exchange_listing_id_count,
             option_listing_count: state.option_listing_count,
             option_market_count: state.option_market_count,
+            coverage_count: state.coverage_count,
+            usable_coverage_count: state.usable_coverage_count,
+            stale_coverage_count: state.stale_coverage_count,
+            unavailable_coverage_count: state.unavailable_coverage_count,
+            unresolved_venue_mapping_count: state.unresolved_venue_mapping_count,
+            v2_unprojectable_market_count: state.v2_unprojectable_market_count,
         }
     }
 }
@@ -197,7 +226,7 @@ impl ReferenceActor {
         let metadata = CatalogMetadata::from(&catalog);
         #[cfg(not(test))]
         let metadata = {
-            let state = store.load_runtime_snapshot().await?;
+            let state = store.load_runtime_metrics().await?;
             CatalogMetadata::from(state)
         };
         log_catalog_loaded(&metadata);
@@ -289,11 +318,28 @@ impl ReferenceActor {
         budget: SourceTickBudget,
     ) -> ReferenceResult<RefreshResult> {
         let started = std::time::Instant::now();
+        if self
+            .source_mut()?
+            .staged_source_changes()
+            .affects_source(self.source_id())
+        {
+            return self
+                .reconcile_normalized(ProviderCatalog::default(), started)
+                .await;
+        }
         let normalized = self.source_mut()?.normalized_facts_authoritative();
-        let incoming = self
+        let incoming = match self
             .source_mut()?
             .advance_workflow_with_budget(connections, budget)
-            .await?;
+            .await
+        {
+            Ok(incoming) => incoming,
+            Err(error) => {
+                self.reconcile_normalized(ProviderCatalog::default(), started)
+                    .await?;
+                return Err(error);
+            },
+        };
         if normalized {
             return self.reconcile_normalized(incoming, started).await;
         }
@@ -317,20 +363,33 @@ impl ReferenceActor {
         budget: SourceTickBudget,
     ) -> ReferenceResult<RefreshResult> {
         let started = std::time::Instant::now();
+        if self
+            .source_mut()?
+            .staged_source_changes()
+            .affects_source(source_id)
+        {
+            return self
+                .reconcile_normalized(ProviderCatalog::default(), started)
+                .await;
+        }
         let normalized = self.source_mut()?.normalized_facts_authoritative();
-        match self
+        let outcome = self
             .source_mut()?
             .advance_source_with_budget(source_id, connections, budget)
-            .await?
-        {
-            Some(incoming) if normalized => self.reconcile_normalized(incoming, started).await,
-            Some(incoming) => self.reconcile(incoming, started).await,
-            None => Ok(RefreshResult {
+            .await;
+        match outcome {
+            Err(error) => {
+                self.reconcile_normalized(ProviderCatalog::default(), started)
+                    .await?;
+                Err(error)
+            },
+            Ok(Some(incoming)) if normalized => self.reconcile_normalized(incoming, started).await,
+            Ok(Some(incoming)) => self.reconcile(incoming, started).await,
+            Ok(None) => Ok(RefreshResult {
                 generation: self.metadata.generation,
                 event_sequence: self.metadata.event_sequence,
                 changed: false,
                 event_count: 0,
-                events: Vec::new(),
             }),
         }
     }
@@ -341,11 +400,27 @@ impl ReferenceActor {
         started: std::time::Instant,
     ) -> ReferenceResult<RefreshResult> {
         overlay.validate()?;
-        let candidate = self
+        let selected_changes = self.source_mut()?.staged_source_changes();
+        let selection = self
             .provider_sync_store
-            .load_provider_candidate(&overlay)
+            .select_provider_candidate(&overlay, &selected_changes)
             .await?;
-        self.reconcile_candidate(candidate, started, true).await
+        for (scans, error) in &selection.rejected {
+            let rejected = crate::services::sources::SourceChanges {
+                completed_scans: scans.iter().cloned().collect(),
+                ..Default::default()
+            };
+            self.source_mut()?
+                .note_rejected_scans(&rejected, error)
+                .await?;
+        }
+        let result = self
+            .reconcile_candidate(selection.catalog, started, Some(selection.accepted))
+            .await?;
+        if let Some((_, error)) = selection.rejected.into_iter().next() {
+            return Err(error);
+        }
+        Ok(result)
     }
 
     pub async fn set_source_desired_state(
@@ -355,7 +430,10 @@ impl ReferenceActor {
     ) -> ReferenceResult<()> {
         self.source_mut()?
             .set_source_desired_state(source_id, desired_state)
-            .await
+            .await?;
+        self.reconcile_normalized(ProviderCatalog::default(), std::time::Instant::now())
+            .await?;
+        Ok(())
     }
 
     pub async fn set_source_desired_state_with_connections(
@@ -366,7 +444,10 @@ impl ReferenceActor {
     ) -> ReferenceResult<()> {
         self.source_mut()?
             .set_source_desired_state_with_connections(source_id, desired_state, connections)
-            .await
+            .await?;
+        self.reconcile_normalized(ProviderCatalog::default(), std::time::Instant::now())
+            .await?;
+        Ok(())
     }
 
     pub async fn upsert_source_definition(
@@ -453,42 +534,101 @@ impl ReferenceActor {
         incoming: ProviderCatalog,
         started: std::time::Instant,
     ) -> ReferenceResult<RefreshResult> {
-        self.reconcile_candidate(incoming, started, false).await
+        self.reconcile_candidate(incoming, started, None).await
     }
 
     async fn reconcile_candidate(
         &mut self,
         incoming: ProviderCatalog,
         started: std::time::Instant,
-        commit_provider_promotions: bool,
+        source_changes: Option<crate::services::sources::SourceChanges>,
     ) -> ReferenceResult<RefreshResult> {
         incoming.validate()?;
         let mut candidate = self.store.load().await?.unwrap_or_default();
         let previous_generation = candidate.generation;
-        let events = candidate.apply(incoming, unix_nanos());
-        let affected = AffectedReferenceSet::from_events(&events);
-        const IN_MEMORY_LIFECYCLE_LIMIT: usize = 4096;
-        candidate.retain_recent_lifecycle_events(IN_MEMORY_LIFECYCLE_LIMIT);
+        let mut events = candidate.apply_events(incoming, unix_nanos());
+        let catalog_event_count = events.len();
+        let tentative_generation = if candidate.generation == previous_generation {
+            kairos_primitives::time::Generation::new(previous_generation.get() + 1)
+        } else {
+            candidate.generation
+        };
+        let coverage_transitions = if let Some(source_changes) = &source_changes {
+            self.provider_sync_store
+                .pending_coverage_state_changes(
+                    tentative_generation,
+                    kairos_primitives::time::Sequence::new(candidate.event_sequence.get() + 1),
+                    source_changes,
+                )
+                .await?
+        } else {
+            Vec::new()
+        };
+        if !coverage_transitions.is_empty() {
+            candidate.generation = tentative_generation;
+            for (_, coverage) in &coverage_transitions {
+                let sequence = coverage
+                    .event_sequence
+                    .expect("coverage transition sequence is allocated before commit");
+                events.push(LifecycleEvent {
+                    event_id: format!("reference:{sequence:020}"),
+                    event_type: "coverage_state_changed".into(),
+                    event_time_unix_nanos: coverage.last_attempt_unix_nanos.unwrap_or_default(),
+                    record_kind: Some("coverage".into()),
+                    record_id: Some(coverage.coverage_id.to_string()),
+                    generation: tentative_generation,
+                    ..LifecycleEvent::default()
+                });
+            }
+            candidate.event_sequence += coverage_transitions.len() as u64;
+            candidate
+                .lifecycle_events
+                .extend(events.iter().skip(catalog_event_count));
+        }
+        candidate.retain_recent_lifecycle_events(ReferenceCatalog::LIFECYCLE_HISTORY_LIMIT);
         let changed = previous_generation != candidate.generation || !events.is_empty();
         let mut save_outcome = None;
-        if changed || commit_provider_promotions {
-            let publications = encode_publications(
-                &candidate,
-                &events,
+        if changed || source_changes.is_some() {
+            let coverage_publications = encode_coverage_publications(
+                &coverage_transitions,
                 self.producer_incarnation,
                 &self.identity,
             )?;
+            let publications = events
+                .iter()
+                .take(catalog_event_count)
+                .map(|event| {
+                    crate::services::publication::encode_publication(
+                        &candidate,
+                        &event,
+                        self.producer_incarnation,
+                        &self.identity,
+                    )
+                })
+                .chain(coverage_publications.into_iter().map(Ok));
             save_outcome = Some(
                 self.store
-                    .save_refresh(&candidate, &events, &publications)
+                    .save_refresh(
+                        &candidate,
+                        events.iter(),
+                        publications,
+                        source_changes.as_ref(),
+                    )
                     .await?,
             );
         }
-        self.metadata = CatalogMetadata::from(self.store.load_runtime_snapshot().await?);
+        self.metadata = CatalogMetadata::from(self.store.load_runtime_metrics().await?);
         #[cfg(test)]
         {
             self.catalog = candidate;
         }
+        // A successful save already returns the exact affected counts. Do not
+        // retain a second million-ID set beside persistence's own write set.
+        let affected = if save_outcome.is_none() {
+            AffectedReferenceSet::from_events(events.iter())
+        } else {
+            AffectedReferenceSet::default()
+        };
         let affected_summary =
             CatalogReconcileSummary::from_save_outcome(save_outcome.as_ref(), &affected);
         log_reconcile_apply_completed(
@@ -498,13 +638,14 @@ impl ReferenceActor {
             &affected_summary,
             started.elapsed().as_millis() as u64,
         );
-        self.source_mut()?.mark_promotions_committed();
+        if let Some(committed) = &source_changes {
+            self.source_mut()?.mark_sources_committed(committed);
+        }
         Ok(RefreshResult {
             generation: self.metadata.generation,
             event_sequence: self.metadata.event_sequence,
             changed,
             event_count: events.len(),
-            events,
         })
     }
 
@@ -520,9 +661,14 @@ impl ReferenceActor {
             &self.identity,
         )?;
         self.store
-            .save_refresh(&catalog, std::slice::from_ref(&event), &publications)
+            .save_refresh(
+                &catalog,
+                std::iter::once(event.clone()),
+                publications.into_iter().map(Ok),
+                None,
+            )
             .await?;
-        self.metadata = CatalogMetadata::from(self.store.load_runtime_snapshot().await?);
+        self.metadata = CatalogMetadata::from(self.store.load_runtime_metrics().await?);
         #[cfg(test)]
         {
             self.catalog = catalog;
@@ -591,5 +737,4 @@ pub struct RefreshResult {
     pub event_sequence: kairos_primitives::time::Sequence,
     pub changed: bool,
     pub event_count: usize,
-    pub events: Vec<LifecycleEvent>,
 }

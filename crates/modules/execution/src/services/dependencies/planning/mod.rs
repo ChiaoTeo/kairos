@@ -22,16 +22,14 @@ impl std::ops::DerefMut for IntentPlanningContext {
 }
 
 impl IntentPlanningContext {
-    pub(super) fn from_manifest_with_reference_snapshot(
+    pub(super) fn from_manifest_with_reference_catalog(
         system: &mut kairos_conflux::ConfluxSystem,
         path: impl AsRef<Path>,
-        reference_snapshot: Option<kairos_reference_contract::ExecutionReferenceSnapshot>,
-    ) -> Result<Self, String> {
+        reference: Option<kairos_reference_contract::ReferenceCatalog>,
+    ) -> Result<Self, AdmissionError> {
         Ok(Self {
-            dependencies: ExecutionDependencyAccess::from_manifest_with_reference_snapshot(
-                system,
-                path,
-                reference_snapshot,
+            dependencies: ExecutionDependencyAccess::from_manifest_with_reference_catalog(
+                system, path, reference,
             )?,
             business_time_unix_nanos: None,
         })
@@ -45,7 +43,7 @@ impl IntentPlanningContext {
     fn plan_explicit_legs(
         &mut self,
         intent: &ExecuteStrategyIntent,
-    ) -> Result<Vec<SubmitOrder>, String> {
+    ) -> Result<Vec<SubmitOrder>, AdmissionError> {
         let mut orders = Vec::with_capacity(intent.legs.len());
         for leg in &intent.legs {
             if leg.leg_id.as_str().trim().is_empty()
@@ -65,7 +63,9 @@ impl IntentPlanningContext {
                 let target = decimal_quantity(leg.quantity)?;
                 let delta = target
                     .checked_sub(current)
-                    .ok_or_else(|| "explicit intent leg quantity overflow".to_string())?;
+                    .ok_or(AdmissionError::Overflow {
+                        operation: "explicit intent leg quantity",
+                    })?;
                 if delta == Decimal::ZERO {
                     continue;
                 }
@@ -85,7 +85,10 @@ impl IntentPlanningContext {
             };
             orders.push(SubmitOrder {
                 order_id: OrderId::new(format!("{}:order:{}", intent.intent_id, leg.leg_id))
-                    .map_err(|error| error.to_string())?,
+                    .map_err(|source| AdmissionError::InvalidSemantic {
+                        field: "planned_order_id",
+                        source,
+                    })?,
                 intent_id: Some(intent.intent_id.clone()),
                 strategy_id: Some(intent.strategy_id.clone()),
                 account_id: leg.account_id.clone(),
@@ -119,9 +122,11 @@ impl IntentPlanningContext {
         }
         if self.market_snapshot.is_some() {
             let quotes = self.read_market_quotes_for_orders(&orders)?;
-            let business_time = self
-                .business_time_unix_nanos
-                .ok_or_else(|| "intent planning requires explicit business time".to_string())?;
+            let business_time =
+                self.business_time_unix_nanos
+                    .ok_or(AdmissionError::Validation {
+                        rule: "intent planning requires explicit business time",
+                    })?;
             let authoritative_max_age = match &intent.algorithm {
                 crate::domain::ExecutionAlgorithmPolicy::PassiveLimit(policy) => {
                     Some(policy.max_quote_age)
@@ -135,12 +140,17 @@ impl IntentPlanningContext {
 }
 
 impl IntentPlanningContext {
-    pub(super) fn advance_time(&mut self, event_time_unix_nanos: u64) -> Result<(), String> {
+    pub(super) fn advance_time(
+        &mut self,
+        event_time_unix_nanos: u64,
+    ) -> Result<(), AdmissionError> {
         if self
             .business_time_unix_nanos
             .is_some_and(|current| event_time_unix_nanos < current)
         {
-            return Err("execution business time cannot move backwards".into());
+            return Err(AdmissionError::Validation {
+                rule: "execution business time cannot move backwards",
+            });
         }
         self.business_time_unix_nanos = Some(event_time_unix_nanos);
         Ok(())
@@ -153,7 +163,7 @@ impl IntentPlanningContext {
     pub(super) fn plan_intent(
         &mut self,
         intent: &ExecuteStrategyIntent,
-    ) -> Result<Vec<SubmitOrder>, String> {
+    ) -> Result<Vec<SubmitOrder>, AdmissionError> {
         self.refresh_account_dependency_states()?;
         self.refresh_watermarks();
         if !intent.legs.is_empty() {
@@ -165,7 +175,9 @@ impl IntentPlanningContext {
                 .map(|(quote, _)| vec![quote])
                 .unwrap_or_default();
             if quotes.is_empty() {
-                return Err("market snapshot has no quotes".into());
+                return Err(AdmissionError::Rule {
+                    rule: crate::domain::AdmissionRule::QuoteUnavailable,
+                });
             }
             if let Some(limit) = intent.limit_price {
                 validate_market_price(&quotes, intent, limit)?;
@@ -182,13 +194,19 @@ impl IntentPlanningContext {
             let target = decimal_quantity(intent.target_quantity)?;
             let delta = target
                 .checked_sub(current)
-                .ok_or_else(|| "intent quantity overflow".to_string())?;
+                .ok_or(AdmissionError::Overflow {
+                    operation: "intent target quantity",
+                })?;
             if delta == Decimal::ZERO {
                 continue;
             }
             orders.push(SubmitOrder {
-                order_id: OrderId::new(format!("{}:order:{}", intent.intent_id, index))
-                    .map_err(|error| error.to_string())?,
+                order_id: OrderId::new(format!("{}:order:{}", intent.intent_id, index)).map_err(
+                    |source| AdmissionError::InvalidSemantic {
+                        field: "planned_order_id",
+                        source,
+                    },
+                )?,
                 intent_id: Some(intent.intent_id.clone()),
                 strategy_id: Some(intent.strategy_id.clone()),
                 account_id: account_id.clone(),
@@ -219,10 +237,10 @@ impl IntentPlanningContext {
         &mut self,
         instrument_id: &str,
         market_id: Option<&str>,
-    ) -> Result<Option<QuoteObservation>, String> {
+    ) -> Result<Option<QuoteObservation>, AdmissionError> {
         self.read_market_quote(market_id, instrument_id)?
             .map(|(quote, _generation)| {
-                Ok::<_, String>(QuoteObservation {
+                Ok::<_, AdmissionError>(QuoteObservation {
                     instrument_id: quote.instrument_id,
                     market_id: Some(quote.market_id),
                     bid_price: quote.bid_price,

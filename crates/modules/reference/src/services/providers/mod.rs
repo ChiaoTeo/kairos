@@ -108,6 +108,16 @@ impl OkxProduct {
             Self::Option => "okx-options",
         }
     }
+
+    pub(crate) const fn profile_product(self) -> &'static str {
+        match self {
+            Self::Spot => "spot",
+            Self::Margin => "margin",
+            Self::Swap => "swap",
+            Self::Futures => "futures",
+            Self::Option => "options",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -220,6 +230,9 @@ fn merge_provider_catalog(
 ) -> ProviderCatalog {
     let previous = previous.unwrap_or_default();
     ProviderCatalog {
+        venues: merge_records(previous.venues, incoming.venues, |value| {
+            value.venue_id.clone()
+        }),
         exchanges: merge_records(previous.exchanges, incoming.exchanges, |value| {
             value.exchange_id.clone()
         }),
@@ -235,6 +248,29 @@ fn merge_provider_catalog(
         markets: merge_records(previous.markets, incoming.markets, |value| {
             value.market_id.clone()
         }),
+        venue_listings: merge_records(previous.venue_listings, incoming.venue_listings, |value| {
+            value.listing_id.clone()
+        }),
+        venue_markets: merge_records(previous.venue_markets, incoming.venue_markets, |value| {
+            value.market_id.clone()
+        }),
+        provider_catalog_memberships: merge_records(
+            previous.provider_catalog_memberships,
+            incoming.provider_catalog_memberships,
+            |value| (value.source_id.clone(), value.instrument_id.clone()),
+        ),
+        venue_identifier_mappings: merge_records(
+            previous.venue_identifier_mappings,
+            incoming.venue_identifier_mappings,
+            |value| {
+                (
+                    value.provider.clone(),
+                    value.provider_product.clone(),
+                    value.identifier_kind,
+                    value.identifier.clone(),
+                )
+            },
+        ),
     }
 }
 

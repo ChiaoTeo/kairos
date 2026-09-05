@@ -2077,6 +2077,8 @@ impl MarketEvent {
                 .as_ref()
                 .map(|value| quantity_input(value).map(decimal_from_quantity))
                 .transpose()?,
+            bid_venue_id: None,
+            ask_venue_id: None,
             bid_venue_code: None,
             ask_venue_code: None,
             tape: None,
@@ -2218,6 +2220,10 @@ struct MarketQuoteCurrent {
     ask_quantity: Option<NativeDecimal>,
     #[pyo3(get)]
     bid_venue_code: Option<String>,
+    #[pyo3(get)]
+    bid_venue_id: Option<String>,
+    #[pyo3(get)]
+    ask_venue_id: Option<String>,
     #[pyo3(get)]
     ask_venue_code: Option<String>,
     #[pyo3(get)]
@@ -2929,6 +2935,8 @@ impl From<RustQuote> for MarketQuoteCurrent {
             ask_price: value.ask_price.map(decimal_from_price),
             ask_quantity: value.ask_quantity.map(decimal_from_quantity),
             bid_venue_code: value.bid_venue_code,
+            bid_venue_id: value.bid_venue_id.map(|value| value.to_string()),
+            ask_venue_id: value.ask_venue_id.map(|value| value.to_string()),
             ask_venue_code: value.ask_venue_code,
             tape: value.tape,
             source_observed_at_unix_nanos: value.source_observed_at.get(),
@@ -3916,6 +3924,18 @@ fn project_quote(
         ask_price: value.ask_price().map(event_price).transpose()?,
         ask_quantity: value.ask_quantity().map(event_quantity).transpose()?,
         bid_venue_code: optional_event_text(value.bid_venue_code()),
+        bid_venue_id: value
+            .bid_venue_id()
+            .map(kairos_primitives::reference::VenueId::new)
+            .transpose()
+            .map_err(|error| MarketInvalidEventError::new_err(error.to_string()))?
+            .map(|value| value.to_string()),
+        ask_venue_id: value
+            .ask_venue_id()
+            .map(kairos_primitives::reference::VenueId::new)
+            .transpose()
+            .map_err(|error| MarketInvalidEventError::new_err(error.to_string()))?
+            .map(|value| value.to_string()),
         ask_venue_code: optional_event_text(value.ask_venue_code()),
         tape: (value.tape() != 0).then_some(value.tape()),
         source_observed_at_unix_nanos: value.source_observed_at_unix_nanos(),

@@ -33,6 +33,7 @@ impl<'a> Instrument<'a> {
     pub const VT_SHARE_CLASS: ::flatbuffers::VOffsetT = 24;
     pub const VT_PRIMARY_CURRENCY_ASSET_ID: ::flatbuffers::VOffsetT = 26;
     pub const VT_STATUS: ::flatbuffers::VOffsetT = 28;
+    pub const VT_SETTLEMENT_ASSET_ID: ::flatbuffers::VOffsetT = 30;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -50,6 +51,9 @@ impl<'a> Instrument<'a> {
     ) -> ::flatbuffers::WIPOffset<Instrument<'bldr>> {
         let mut builder = InstrumentBuilder::new(_fbb);
         builder.add_expiry_unix_nanos(args.expiry_unix_nanos);
+        if let Some(x) = args.settlement_asset_id {
+            builder.add_settlement_asset_id(x);
+        }
         if let Some(x) = args.primary_currency_asset_id {
             builder.add_primary_currency_asset_id(x);
         }
@@ -229,6 +233,18 @@ impl<'a> Instrument<'a> {
                 .unwrap()
         }
     }
+    #[inline]
+    pub fn settlement_asset_id(&self) -> Option<&'a str> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab.get::<::flatbuffers::ForwardsUOffset<&str>>(
+                Instrument::VT_SETTLEMENT_ASSET_ID,
+                None,
+            )
+        }
+    }
 }
 
 impl ::flatbuffers::Verifiable for Instrument<'_> {
@@ -283,6 +299,11 @@ impl ::flatbuffers::Verifiable for Instrument<'_> {
                 false,
             )?
             .visit_field::<ReferenceLifecycleStatus>("status", Self::VT_STATUS, false)?
+            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
+                "settlement_asset_id",
+                Self::VT_SETTLEMENT_ASSET_ID,
+                false,
+            )?
             .finish();
         Ok(())
     }
@@ -301,6 +322,7 @@ pub struct InstrumentArgs<'a> {
     pub share_class: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub primary_currency_asset_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub status: ReferenceLifecycleStatus,
+    pub settlement_asset_id: Option<::flatbuffers::WIPOffset<&'a str>>,
 }
 impl<'a> Default for InstrumentArgs<'a> {
     #[inline]
@@ -319,6 +341,7 @@ impl<'a> Default for InstrumentArgs<'a> {
             share_class: None,
             primary_currency_asset_id: None,
             status: ReferenceLifecycleStatus::UNSPECIFIED,
+            settlement_asset_id: None,
         }
     }
 }
@@ -420,6 +443,16 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> InstrumentBuilder<'a, 'b, A> 
         );
     }
     #[inline]
+    pub fn add_settlement_asset_id(
+        &mut self,
+        settlement_asset_id: ::flatbuffers::WIPOffset<&'b str>,
+    ) {
+        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+            Instrument::VT_SETTLEMENT_ASSET_ID,
+            settlement_asset_id,
+        );
+    }
+    #[inline]
     pub fn new(
         _fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>,
     ) -> InstrumentBuilder<'a, 'b, A> {
@@ -460,6 +493,7 @@ impl ::core::fmt::Debug for Instrument<'_> {
             &self.primary_currency_asset_id(),
         );
         ds.field("status", &self.status());
+        ds.field("settlement_asset_id", &self.settlement_asset_id());
         ds.finish()
     }
 }

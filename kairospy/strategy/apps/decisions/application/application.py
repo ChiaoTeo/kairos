@@ -34,6 +34,19 @@ def _integer(value: object, name: str) -> int:
     return value
 
 
+def _effect_outcome(value: object) -> EffectOutcome:
+    outcome = str(value)
+    if outcome == "favorable":
+        return "favorable"
+    if outcome == "neutral":
+        return "neutral"
+    if outcome == "adverse":
+        return "adverse"
+    if outcome == "unavailable":
+        return "unavailable"
+    raise ValueError(f"unsupported effect outcome: {outcome}")
+
+
 class DecisionLifecycle(StrEnum):
     RECORDED = "recorded"
     NOT_SUBMITTED = "not_submitted"
@@ -316,9 +329,7 @@ class StrategyDecisionApplication:
                 instrument_id=str(getattr(fill, "instrument_id")),
                 quantity=str(getattr(getattr(fill, "quantity"), "value")),
                 price=str(getattr(getattr(fill, "price"), "value")),
-                occurred_at_unix_nanos=int(
-                    getattr(fill, "occurred_at_unix_nanos")
-                ),
+                occurred_at_unix_nanos=int(getattr(fill, "occurred_at_unix_nanos")),
                 source_event_sequence=event.metadata.sequence,
             )
         if event.kind not in {
@@ -390,9 +401,7 @@ class StrategyDecisionApplication:
                 reason=reason,
                 source_event_sequence=event.metadata.sequence,
             )
-        self._complete_execution_if_ready(
-            state, occurred_at_unix_nanos, replay=replay
-        )
+        self._complete_execution_if_ready(state, occurred_at_unix_nanos, replay=replay)
         return self._snapshot(state)
 
     def reconcile_execution_snapshot(
@@ -1019,7 +1028,7 @@ class StrategyDecisionApplication:
             ),
             str(value["horizon"]),
             _integer(value["revision"], "evaluation revision"),
-            str(value["outcome"]),  # type: ignore[arg-type]
+            _effect_outcome(value["outcome"]),
             _integer(value["evaluated_at_unix_nanos"], "evaluated_at_unix_nanos"),
             str(value["summary"]),
             evidence,

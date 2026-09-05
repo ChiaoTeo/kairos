@@ -12,6 +12,7 @@ use kairos_protocol::generated::kairos::market::v_2 as fb;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let root = PathBuf::from(std::env::args_os().nth(1).ok_or("missing output root")?);
+    let with_venue_ids = std::env::args().nth(2).as_deref() == Some("--venue-identities");
     let identity = InstanceIdentity::new("workspace", "launch", "instance")?;
     let key = MarketViewKey::new(
         "market:fixture",
@@ -28,7 +29,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &[Mutation::Put {
             database: MARKET_QUOTES_DATABASE.to_owned(),
             key: market_indexed_key(&key)?,
-            value: quote_value(&key),
+            value: quote_value(&key, with_venue_ids),
         }],
         41,
         1_780_000_000_000_000_000,
@@ -36,7 +37,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn quote_value(key: &MarketViewKey) -> Vec<u8> {
+fn quote_value(key: &MarketViewKey, with_venue_ids: bool) -> Vec<u8> {
     let mut builder = FlatBufferBuilder::new();
     let market_id = builder.create_string(&key.scope_key);
     let scope = fb::ObservationScope::create(
@@ -51,6 +52,10 @@ fn quote_value(key: &MarketViewKey) -> Vec<u8> {
     let provider = builder.create_string(key.provider.as_str());
     let bid = Decimal64::new(12345, 2);
     let ask = Decimal64::new(12355, 2);
+    let bid_venue = with_venue_ids.then(|| builder.create_string("venue:bid"));
+    let ask_venue = with_venue_ids.then(|| builder.create_string("venue:ask"));
+    let bid_code = builder.create_string("19");
+    let ask_code = builder.create_string("11");
     let quote = fb::Quote::create(
         &mut builder,
         &fb::QuoteArgs {
@@ -59,6 +64,10 @@ fn quote_value(key: &MarketViewKey) -> Vec<u8> {
             provider: Some(provider),
             bid_price: Some(&bid),
             ask_price: Some(&ask),
+            bid_venue_id: bid_venue,
+            ask_venue_id: ask_venue,
+            bid_venue_code: Some(bid_code),
+            ask_venue_code: Some(ask_code),
             source_observed_at_unix_nanos: 1_779_999_999_000_000_000,
             ..Default::default()
         },

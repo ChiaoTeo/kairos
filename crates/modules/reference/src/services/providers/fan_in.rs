@@ -31,6 +31,7 @@ pub struct ProviderFanInSource<S> {
     runtime: SourceRuntimeRegistry,
     sync_store: Option<SqlxProviderSyncStore>,
     credential_resolver: ReferenceCredentialResolver,
+    staged_changes: crate::services::sources::SourceChanges,
 }
 
 #[cfg(not(test))]
@@ -81,7 +82,7 @@ struct ProviderWorker<S> {
 // Each provider refresh advances a bounded page batch. Large providers persist
 // their cursor and candidate catalog between refreshes, while only completed
 // candidates are promoted to last-known-good.
-const PROVIDER_FETCH_TIMEOUT: Duration = Duration::from_secs(150);
+pub(super) const PROVIDER_FETCH_TIMEOUT: Duration = Duration::from_secs(150);
 pub(super) const MASSIVE_PAGE_TIMEOUT: Duration = Duration::from_secs(20);
 
 impl<S> ProviderFanInSource<S>
@@ -123,21 +124,32 @@ where
         #[cfg(test)]
         let mut last_good = BTreeMap::new();
         let mut runtime = SourceRuntimeRegistry::default();
-        let desired_states = if let Some(store) = sync_store.as_mut() {
-            store.source_desired_states().await?
+        let persisted_definitions = if let Some(store) = sync_store.as_mut() {
+            store.source_definitions().await?
         } else {
             Vec::new()
         };
-        let desired_by_source = desired_states.iter().cloned().collect::<BTreeMap<_, _>>();
+        let persisted_by_source = persisted_definitions
+            .iter()
+            .cloned()
+            .map(|definition| (definition.source_id.to_string(), definition))
+            .collect::<BTreeMap<_, _>>();
         for source in &sources {
-            let mut definition = source.source_definition()?;
-            if let Some(desired_state) = desired_by_source.get(definition.source_id.as_str()) {
-                definition.desired_state = *desired_state;
-            }
+            let seed = source.source_definition()?;
+            let definition = persisted_by_source
+                .get(seed.source_id.as_str())
+                .cloned()
+                .unwrap_or_else(|| seed.clone());
             runtime.register_definition(definition.clone());
             if let Some(store) = sync_store.as_mut() {
                 if store.supports_normalized_promotion() {
-                    store.upsert_source_definition(definition).await?;
+                    // Built-in public sources are first-start seeds. Once a
+                    // definition exists, the Reference-owned registry is the
+                    // authority and startup must not overwrite its scope,
+                    // connection binding, policy, or desired state.
+                    if !persisted_by_source.contains_key(seed.source_id.as_str()) {
+                        store.upsert_source_definition(definition).await?;
+                    }
                     if store.has_last_good(source.source_id()).await? {
                         runtime.note_last_good(source.source_id().to_owned());
                     }
@@ -164,12 +176,16 @@ where
                 }
             }
         }
-        if let Some(store) = sync_store.as_mut() {
-            for definition in store.source_definitions().await? {
+        if sync_store.is_some() {
+            for definition in persisted_definitions {
                 runtime.register_definition(definition);
             }
-            runtime.set_desired_states(desired_states);
         }
+        let desired_states = runtime
+            .definitions()
+            .map(|definition| (definition.source_id.to_string(), definition.desired_state))
+            .collect::<Vec<_>>();
+        runtime.set_desired_states(desired_states);
         let workers = sources
             .into_iter()
             .map(|source| {
@@ -185,6 +201,7 @@ where
             runtime,
             sync_store,
             credential_resolver,
+            staged_changes: crate::services::sources::SourceChanges::default(),
         })
     }
 
@@ -201,7 +218,7 @@ where
 
     async fn fetch_normalized_facts(
         &mut self,
-        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        connections: &kairos_conflux::ConnectionCollections<'_>,
         budget: SourceTickBudget,
     ) -> ReferenceResult<ProviderCatalog> {
         let tick_started = Instant::now();
@@ -215,9 +232,18 @@ where
         let mut admitted_sources = 0u32;
         let worker_count = self.workers.len();
         let mut last_admitted_index = None;
-        for offset in 0..worker_count {
-            let index = (self.next_worker_index + offset) % worker_count;
-            let worker = &mut self.workers[index];
+        let start_index = self.next_worker_index.min(worker_count);
+        let (head, tail) = self.workers.split_at_mut(start_index);
+        for (index, worker) in tail
+            .iter_mut()
+            .enumerate()
+            .map(|(offset, worker)| (start_index + offset, worker))
+            .chain(head.iter_mut().enumerate())
+        {
+            if self.staged_changes.affects_source(&worker.source_id) {
+                log_source_work_skipped(&worker.source_id, SourceScheduleSkipReason::CommitPending);
+                continue;
+            }
             let work_item =
                 match self
                     .runtime
@@ -263,25 +289,28 @@ where
             log_source_retry_scheduled(&work_item);
             log_source_work_started(&work_item);
             let source_id = work_item.source_id.clone();
-            let result = tokio::time::timeout(
-                PROVIDER_FETCH_TIMEOUT,
-                worker
-                    .source
-                    .advance_workflow_step_with_budget(connections, budget),
-            )
-            .await
-            .map_err(|error| {
-                ReferenceError::Provider(format!("provider fetch timed out: {error}"))
-            })?;
-            let mut result = result;
-            if let Ok(update) = &mut result {
-                update.note_scheduled_work_item(&work_item);
-            }
-            requests.push(Ok::<_, ReferenceError>((source_id, result)));
+            requests.push(async move {
+                let mut result = tokio::time::timeout(
+                    PROVIDER_FETCH_TIMEOUT,
+                    worker
+                        .source
+                        .advance_workflow_step_with_budget(connections, budget),
+                )
+                .await
+                .map_err(|error| {
+                    ReferenceError::Provider(format!("provider fetch timed out: {error}"))
+                })
+                .and_then(|result| result);
+                if let Ok(update) = &mut result {
+                    update.note_scheduled_work_item(&work_item);
+                }
+                (source_id, result)
+            });
         }
         if let Some(index) = last_admitted_index {
             self.next_worker_index = (index + 1) % worker_count.max(1);
         }
+        let requests = futures_util::future::join_all(requests).await;
         if self.sync_store.is_none() {
             return Err(ReferenceError::Persistence(
                 "normalized provider store is unavailable".into(),
@@ -315,14 +344,10 @@ where
                 unavailable.push(source_id);
             }
         }
-        for result in requests {
-            let (source_id, result) = match result {
-                Ok(value) => value,
-                Err(error) => return Err(error),
-            };
+        for (source_id, result) in requests {
             match result {
                 Ok(update) if update.complete => {
-                    if !update.facts_persisted {
+                    if update.staged_changes.is_none() {
                         update.catalog.validate()?;
                         self.sync_store
                             .as_mut()
@@ -330,6 +355,7 @@ where
                             .save_last_good(&source_id, &update.catalog)
                             .await?;
                     }
+                    self.record_staged_changes(&source_id, &update)?;
                     self.mark_promoting(&source_id, &update);
                     log_source_scan_completed(&source_id, &update, Some(true));
                     log_source_candidate_completed(&source_id, &update);
@@ -353,6 +379,11 @@ where
                         .as_mut()
                         .expect("store checked")
                         .has_last_good(&source_id)
+                        .await?;
+                    self.sync_store
+                        .as_mut()
+                        .expect("store checked")
+                        .set_source_failure(&source_id, has_last_good)
                         .await?;
                     self.mark_failure(&source_id, has_last_good, &error);
                     log_source_scan_failed(&source_id, &error, has_last_good);
@@ -423,7 +454,7 @@ where
 
     async fn advance_workflow_with_connections(
         &mut self,
-        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        connections: &kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<ProviderCatalog> {
         self.advance_workflow_with_budget(connections, SourceTickBudget::default())
             .await
@@ -431,7 +462,7 @@ where
 
     async fn advance_workflow_with_budget(
         &mut self,
-        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        connections: &kairos_conflux::ConnectionCollections<'_>,
         budget: SourceTickBudget,
     ) -> ReferenceResult<ProviderCatalog> {
         if self.normalized_facts_authoritative() {
@@ -593,7 +624,7 @@ where
 
     async fn fetch_catalog_with_connections(
         &mut self,
-        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        connections: &kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<ProviderCatalog> {
         self.advance_workflow_with_connections(connections).await
     }
@@ -611,7 +642,7 @@ where
     async fn advance_source_with_connections(
         &mut self,
         source_id: &str,
-        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        connections: &kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<Option<ProviderCatalog>> {
         self.advance_source_with_budget(source_id, connections, SourceTickBudget::default())
             .await
@@ -620,7 +651,7 @@ where
     async fn advance_source_with_budget(
         &mut self,
         source_id: &str,
-        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        connections: &kairos_conflux::ConnectionCollections<'_>,
         budget: SourceTickBudget,
     ) -> ReferenceResult<Option<ProviderCatalog>> {
         let Some(index) = self
@@ -637,6 +668,10 @@ where
                 .registered_source_without_adapter_error(source_id));
         };
         if self.normalized_facts_authoritative() {
+            if self.staged_changes.affects_source(source_id) {
+                log_source_work_skipped(source_id, SourceScheduleSkipReason::CommitPending);
+                return Ok(Some(ProviderCatalog::default()));
+            }
             let Some(work_item) =
                 self.runtime
                     .source_refresh_work_item(source_id, Instant::now(), budget)?
@@ -652,16 +687,15 @@ where
                     .advance_workflow_step_with_budget(connections, budget),
             )
             .await
-            .map_err(|error| {
-                ReferenceError::Provider(format!("provider fetch timed out: {error}"))
-            })?;
+            .map_err(|error| ReferenceError::Provider(format!("provider fetch timed out: {error}")))
+            .and_then(|result| result);
             let mut result = result;
             if let Ok(update) = &mut result {
                 update.note_scheduled_work_item(&work_item);
             }
             return match result {
                 Ok(update) if update.complete => {
-                    if !update.facts_persisted {
+                    if update.staged_changes.is_none() {
                         update.catalog.validate()?;
                         self.sync_store
                             .as_mut()
@@ -669,6 +703,7 @@ where
                             .save_last_good(source_id, &update.catalog)
                             .await?;
                     }
+                    self.record_staged_changes(source_id, &update)?;
                     self.mark_promoting(source_id, &update);
                     log_source_candidate_completed(source_id, &update);
                     Ok(Some(ProviderCatalog::default()))
@@ -683,6 +718,11 @@ where
                         .as_mut()
                         .expect("normalized source has a store")
                         .has_last_good(source_id)
+                        .await?;
+                    self.sync_store
+                        .as_mut()
+                        .expect("normalized source has a store")
+                        .set_source_failure(source_id, has_last_good)
                         .await?;
                     self.mark_failure(source_id, has_last_good, &error);
                     Err(error)
@@ -775,9 +815,18 @@ where
         let store = self.sync_store.as_mut().ok_or_else(|| {
             ReferenceError::Persistence("reference source control store is unavailable".into())
         })?;
+        let removed_scans = if desired_state == SourceDesiredState::Removed {
+            store.source_scan_ids(source_id).await?
+        } else {
+            Vec::new()
+        };
         store
             .set_source_desired_state(source_id, desired_state)
             .await?;
+        for scan in removed_scans {
+            self.staged_changes.completed_scans.remove(&scan);
+            self.staged_changes.removed_scans.insert(scan);
+        }
         self.runtime.apply_desired_state(source_id, desired_state);
         Ok(())
     }
@@ -933,8 +982,41 @@ where
         )
     }
 
-    fn mark_promotions_committed(&mut self) {
-        self.runtime.mark_promotions_committed();
+    fn mark_sources_committed(&mut self, committed: &crate::services::sources::SourceChanges) {
+        self.staged_changes
+            .completed_scans
+            .retain(|source| !committed.completed_scans.contains(source));
+        self.staged_changes
+            .removed_scans
+            .retain(|source| !committed.removed_scans.contains(source));
+        self.runtime
+            .mark_sources_committed(committed, &self.staged_changes);
+    }
+
+    fn staged_source_changes(&self) -> crate::services::sources::SourceChanges {
+        self.staged_changes.clone()
+    }
+
+    async fn note_rejected_scans(
+        &mut self,
+        rejected: &crate::services::sources::SourceChanges,
+        error: &ReferenceError,
+    ) -> ReferenceResult<()> {
+        let sources = self
+            .workers
+            .iter()
+            .filter(|worker| rejected.affects_source(&worker.source_id))
+            .map(|worker| worker.source_id.clone())
+            .collect::<Vec<_>>();
+        for source_id in sources {
+            let store = self.sync_store.as_mut().ok_or_else(|| {
+                ReferenceError::Persistence("normalized provider store is unavailable".into())
+            })?;
+            let has_last_good = store.has_last_good(&source_id).await?;
+            store.set_source_failure(&source_id, has_last_good).await?;
+            self.mark_failure(&source_id, has_last_good, error);
+        }
+        Ok(())
     }
 }
 
@@ -990,6 +1072,32 @@ impl<S> ProviderFanInSource<S>
 where
     S: ReferenceSource,
 {
+    fn record_staged_changes(
+        &mut self,
+        source_id: &str,
+        update: &SourceUpdate,
+    ) -> ReferenceResult<()> {
+        let changes =
+            update
+                .staged_changes
+                .clone()
+                .unwrap_or(crate::services::sources::SourceChanges {
+                    completed_scans: std::collections::BTreeSet::from([ReferenceSourceId::new(
+                        source_id,
+                    )?]),
+                    removed_scans: std::collections::BTreeSet::new(),
+                });
+        for source_id in changes.completed_scans {
+            self.staged_changes.removed_scans.remove(&source_id);
+            self.staged_changes.completed_scans.insert(source_id);
+        }
+        for source_id in changes.removed_scans {
+            self.staged_changes.completed_scans.remove(&source_id);
+            self.staged_changes.removed_scans.insert(source_id);
+        }
+        Ok(())
+    }
+
     fn mark_promoting(&mut self, source_id: &str, update: &SourceUpdate) {
         self.runtime.mark_promoting(
             source_id,

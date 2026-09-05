@@ -6,7 +6,8 @@
 - Supersedes: Generic terminology in Decisions 0003, 0007, 0008, and 0011
 
 Decision 0034 replaces snapshot publication as the default current-view mechanism with an indexed LMDB
-store. This Decision's semantic names remain valid.
+store. Decision 0046 supersedes this Decision specifically for Reference consumers: they use bounded
+current-table queries in a short read session and do not retain a consumer catalog snapshot.
 
 ## Context
 
@@ -42,8 +43,8 @@ Reference database was migrated in place; runtime code accepts only the new sche
 
 - A read entry point communicates its owner, consistency boundary, and
   boundedness without relying on a generic architecture label.
-- Reference consumer snapshots use distinct types, so an omitted collection
-  cannot be confused with an authoritative empty collection.
+- Reference query responses carry coverage evidence, so an empty result is not
+  confused with an authoritative negative conclusion.
 - Execution's refreshed foreign facts are explicitly private dependency state.
 - Current views remain bounded and cannot claim to provide complete audit
   history.

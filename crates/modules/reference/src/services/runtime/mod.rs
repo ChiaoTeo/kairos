@@ -33,7 +33,6 @@ impl SourceRuntimeRegistry {
             .insert(definition.source_id.to_string(), definition);
     }
 
-    #[cfg(test)]
     pub(crate) fn definitions(&self) -> impl Iterator<Item = &ReferenceSourceDefinition> {
         self.definitions.values()
     }
@@ -195,15 +194,44 @@ mod tests {
 
         let health = runtime.health_for(["massive-options"])[0].clone();
         assert_eq!(health.status, SourceRuntimePhase::Promoting);
+        assert!(health.last_success_unix_nanos.is_none());
+        assert!(!runtime.known_last_good.contains("massive-options"));
         assert_eq!(
             health.progress,
             SourceRuntimeProgress::complete(Some(4), Some(4), Some(400), Some(10))
         );
 
-        runtime.mark_promotions_committed();
+        runtime.mark_promoting(
+            "other-source",
+            SourceRuntimeProgress::default(),
+            SourceRuntimeWorkItem::default(),
+        );
+        let changes = |scope: &str| crate::services::sources::SourceChanges {
+            completed_scans: [kairos_primitives::reference::ReferenceSourceId::new(scope).unwrap()]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        runtime.mark_sources_committed(
+            &changes("massive-options:AAPL"),
+            &changes("massive-options:SPY"),
+        );
+        assert_eq!(
+            runtime.health_for(["massive-options"])[0].status,
+            SourceRuntimePhase::Promoting
+        );
+        assert!(!runtime.known_last_good.contains("massive-options"));
+        runtime.mark_sources_committed(&changes("massive-options:SPY"), &Default::default());
+        assert_eq!(
+            runtime.health_for(["other-source"])[0].status,
+            SourceRuntimePhase::Promoting
+        );
+        assert!(!runtime.known_last_good.contains("other-source"));
 
         let health = runtime.health_for(["massive-options"])[0].clone();
         assert_eq!(health.status, SourceRuntimePhase::Ready);
+        assert!(health.last_success_unix_nanos.is_some());
+        assert!(runtime.known_last_good.contains("massive-options"));
         assert_eq!(
             health.work_item.scope_id.as_deref(),
             Some("instrument:equity:US:AAPL:common")

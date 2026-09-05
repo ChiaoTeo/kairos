@@ -17,4 +17,6 @@ table Quote {
   tape:uint;
   source_observed_at_unix_nanos:ulong;
   received_at_unix_nanos:ulong;
+  bid_venue_id:string;
+  ask_venue_id:string;
 }

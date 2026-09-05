@@ -27,37 +27,41 @@ fn collection_market_descriptor(
             "Market collection {name} requires exactly one of market_id or instrument_id"
         )));
     }
-    let query = kairos_reference_contract::MarketCatalogQuery {
-        market_id: collection
+    let query = kairos_reference_contract::VenueMarketSearchQuery {
+        market_ids: collection
             .market_id
             .as_deref()
             .map(kairos_primitives::reference::MarketId::new)
             .transpose()
-            .map_err(MarketStartupError::new)?,
+            .map_err(MarketStartupError::new)?
+            .map(|value| vec![value]),
         instrument_id: collection
             .instrument_id
             .as_deref()
             .map(kairos_primitives::reference::InstrumentId::new)
             .transpose()
             .map_err(MarketStartupError::new)?,
-        statuses: vec![
-            kairos_primitives::reference::ReferenceStatus::Active,
-            kairos_primitives::reference::ReferenceStatus::Trading,
-        ],
-        limit: 10_000,
+        active_only: true,
+        page: kairos_reference_contract::ReferencePage {
+            limit: Some(if collection.market_id.is_some() {
+                2
+            } else {
+                1_000
+            }),
+            offset: 0,
+        },
         ..Default::default()
     };
-    let page = reference
-        .market_catalog(&query)
+    let session = reference.read_session().map_err(MarketStartupError::new)?;
+    let page = session
+        .search_venue_markets(&query)
         .map_err(MarketStartupError::new)?;
-    let snapshot = kairos_reference_contract::MarketReferenceSnapshot {
-        generation: page.watermark.generation,
-        event_sequence: page.watermark.event_sequence,
-        instruments: page.instruments.into_values().collect(),
-        markets: page.markets,
-        ..Default::default()
-    };
-    let universe = resolve_market_universe(&snapshot, sources)
+    if page.next_cursor.is_some() {
+        return Err(MarketStartupError::new(format!(
+            "Market collection {name} resolves to more than 1000 Reference markets; narrow the collection demand"
+        )));
+    }
+    let universe = resolve_market_universe(&page, sources)
         .map_err(MarketStartupError::new)?
         .markets;
     let mut descriptor =
@@ -75,9 +79,9 @@ fn collection_market_descriptor(
                 .instrument_id
                 .as_deref()
                 .expect("collection identity validated");
-            let instrument = snapshot
+            let instrument = page
                 .instruments
-                .iter()
+                .values()
                 .find(|instrument| instrument.instrument_id == instrument_id)
                 .ok_or_else(|| {
                     MarketStartupError::new(format!(

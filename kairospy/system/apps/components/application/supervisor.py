@@ -84,7 +84,11 @@ class ProcessSupervisor:
     ) -> Mapping[str, Any]:
         """Start a process and wait for its process-owned health contract."""
         await self.start(spec)
-        return await self.wait_ready(spec.name, timeout=timeout)
+        try:
+            return await self.wait_ready(spec.name, timeout=timeout)
+        except (RuntimeError, TimeoutError):
+            await self.stop(spec.name)
+            raise
 
     async def wait_ready(
         self, name: str, *, timeout: float = 30.0

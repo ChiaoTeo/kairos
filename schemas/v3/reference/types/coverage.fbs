@@ -1,0 +1,21 @@
+include "common.fbs";
+
+namespace kairos.reference.v3;
+
+table ReferenceCoverage {
+  coverage_id:string (required);
+  source_id:string (required);
+  fact_kinds:[ReferenceFactKind] (required);
+  scope_kind:string (required);
+  scope_binding:string;
+  scope_ids:[string];
+  scope_instrument_kind:string;
+  completeness:CoverageCompleteness = UNKNOWN;
+  state:CoverageState = NOT_CONFIGURED;
+  generation:ulong;
+  event_sequence:ulong;
+  last_attempt_unix_nanos:ulong;
+  last_success_unix_nanos:ulong;
+  stale_after_unix_nanos:ulong;
+  has_last_known_good:bool;
+}

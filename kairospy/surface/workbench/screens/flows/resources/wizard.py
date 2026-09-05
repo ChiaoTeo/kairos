@@ -18,7 +18,10 @@ from kairospy.strategy.apps.agent.application import (
     ModelConnectionDraftApplication,
     ModelEndpointApplication,
 )
-from kairospy.strategy.apps.notification.application import NotificationAdminApplication
+from kairospy.strategy.apps.notification.application import (
+    NotificationAdminApplication,
+    notification_provider,
+)
 from kairospy.system.apps.credentials.application import (
     CredentialConfigurationApplication,
 )
@@ -702,7 +705,7 @@ def save_resource_wizard(state: Any, wizard: ResourceWizardState) -> dict[str, A
             provider_model=str(answers["provider-model"]),
             overwrite=bool(record),
         )
-    provider = str(answers["notification-provider"])
+    provider = notification_provider(answers["notification-provider"])
     secret = str(answers.get("secret-primary") or "")
     credential_id = str(record.get("credential_id") or resource_id)
     field_name = "bot_token" if provider == "telegram" else "webhook_url"
@@ -719,7 +722,7 @@ def save_resource_wizard(state: Any, wizard: ResourceWizardState) -> dict[str, A
         raise ValueError("通知提醒需要 Webhook URL 或 Bot Token")
     return NotificationAdminApplication(owner).configure(
         resource_id,
-        provider=provider,  # type: ignore[arg-type]
+        provider=provider,
         credential_id=credential_id,
         secret=secret,
         chat_id=str(answers.get("chat-id") or "") or None,

@@ -32,13 +32,13 @@ impl ReferenceSource for HyperliquidSource {
 
     async fn fetch_catalog_with_connections(
         &mut self,
-        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        connections: &kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<ProviderCatalog> {
         let facts = match (&mut self.connection, self.product) {
             (ConnectionRef(key), HyperliquidProduct::Perpetual) => {
                 connections
                     .hyperliquid_info_rest
-                    .get(key)
+                    .get_shared(key)
                     .map_err(|error| ReferenceError::Provider(error.to_string()))?
                     .fetch_perpetual_instruments()
                     .await
@@ -46,7 +46,7 @@ impl ReferenceSource for HyperliquidSource {
             (ConnectionRef(key), HyperliquidProduct::Spot) => {
                 connections
                     .hyperliquid_info_rest
-                    .get(key)
+                    .get_shared(key)
                     .map_err(|error| ReferenceError::Provider(error.to_string()))?
                     .fetch_spot_instruments()
                     .await
@@ -106,7 +106,11 @@ pub(super) fn hyperliquid_provider_catalog(
             .as_ref()
             .map(|value| value.as_str().to_ascii_uppercase())
             .unwrap_or_else(|| "USDC".into());
-        for code in [&base, &quote] {
+        let settlement = value
+            .settlement_currency
+            .as_ref()
+            .map(|value| value.as_str().to_ascii_uppercase());
+        for code in [&base, &quote].into_iter().chain(settlement.as_ref()) {
             catalog.assets.push(Asset {
                 asset_id: kairos_primitives::reference::AssetId::new(format!(
                     "asset:crypto:{code}"
@@ -135,6 +139,12 @@ pub(super) fn hyperliquid_provider_catalog(
             instrument_id: instrument_id.clone(),
             symbol: kairos_primitives::reference::Symbol::new(format!("{base}-{quote}"))?,
             instrument_type: instrument_kind,
+            settlement_asset_id: settlement
+                .as_ref()
+                .map(|code| {
+                    kairos_primitives::reference::AssetId::new(format!("asset:crypto:{code}"))
+                })
+                .transpose()?,
             primary_currency_asset_id: Some(kairos_primitives::reference::AssetId::new(format!(
                 "asset:crypto:{base}"
             ))?),

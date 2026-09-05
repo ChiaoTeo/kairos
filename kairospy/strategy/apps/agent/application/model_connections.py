@@ -12,7 +12,7 @@ from pathlib import Path
 import re
 import tempfile
 import tomllib
-from typing import Any, cast
+from typing import Any, TypedDict, cast
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -83,6 +83,16 @@ CatalogProbe = Callable[
 ]
 
 
+class ModelProviderCatalogEntry(TypedDict):
+    provider: str
+    label: str
+    api_mode: str
+    base_url: str
+    credential_provider: str
+    auth_required: bool
+    group: str
+
+
 @dataclass(frozen=True, slots=True)
 class PreparedModelConnection:
     workspace: Workspace
@@ -101,17 +111,34 @@ class PreparedModelConnection:
 class ModelProviderConnectionApplication:
     workspace: Workspace
 
-    def provider_catalog(self) -> tuple[dict[str, object], ...]:
+    def provider_catalog(self) -> tuple[ModelProviderCatalogEntry, ...]:
         return tuple(
-            {"provider": provider, **dict(value)}
+            ModelProviderCatalogEntry(
+                provider=provider,
+                label=str(value["label"]),
+                api_mode=str(value["api_mode"]),
+                base_url=str(value["base_url"]),
+                credential_provider=str(value["credential_provider"]),
+                auth_required=bool(value["auth_required"]),
+                group=str(value["group"]),
+            )
             for provider, value in _PROVIDERS.items()
         )
 
-    def provider_defaults(self, provider: str) -> dict[str, object]:
-        value = _PROVIDERS.get(provider.strip().lower())
+    def provider_defaults(self, provider: str) -> ModelProviderCatalogEntry:
+        provider = provider.strip().lower()
+        value = _PROVIDERS.get(provider)
         if value is None:
             raise ValueError(f"unsupported model provider: {provider}")
-        return {"provider": provider.strip().lower(), **dict(value)}
+        return ModelProviderCatalogEntry(
+            provider=provider,
+            label=str(value["label"]),
+            api_mode=str(value["api_mode"]),
+            base_url=str(value["base_url"]),
+            credential_provider=str(value["credential_provider"]),
+            auth_required=bool(value["auth_required"]),
+            group=str(value["group"]),
+        )
 
     def configure(
         self,

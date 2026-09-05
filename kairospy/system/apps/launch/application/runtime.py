@@ -12,9 +12,18 @@ import time
 from pathlib import Path
 from typing import Any, Mapping, cast
 
-from kairospy.investment.apps.account.application import AccountAdminApplication, TradeLeaseApplication
-from kairospy.research.apps.data.application import DatasetCatalogApplication, DatasetReaderApplication
-from kairospy.investment.apps.market.application import materialize_replay_file, validate_replay_window
+from kairospy.investment.apps.account.application import (
+    AccountAdminApplication,
+    TradeLeaseApplication,
+)
+from kairospy.research.apps.data.application import (
+    DatasetCatalogApplication,
+    DatasetReaderApplication,
+)
+from kairospy.investment.apps.market.application import (
+    materialize_replay_file,
+    validate_replay_window,
+)
 from .strategy_process import StrategyProcessController
 from kairospy.system.apps.components.application import (
     ComponentProcessApplication,
@@ -41,6 +50,18 @@ from .registry import LaunchRegistryApplication
 
 class LaunchRuntimeError(RuntimeError):
     """Raised when a canonical launch cannot complete its runtime use case."""
+
+
+def _load_backtest_report(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as error:
+        raise LaunchRuntimeError(f"backtest report is not available: {path}") from error
+    except json.JSONDecodeError as error:
+        raise LaunchRuntimeError(f"backtest report is invalid: {path}") from error
+    if not isinstance(value, dict):
+        raise LaunchRuntimeError(f"backtest report must be an object: {path}")
+    return value
 
 
 def requires_reference_runtime(mode: str, has_static_replay: bool) -> bool:
@@ -137,8 +158,7 @@ def write_instance_manifest(
         "instance_id": instance_workspace.instance_id,
         "mode": instance_workspace.mode,
         "event_routes": {
-            route_id: route.as_manifest()
-            for route_id, route in event_routes.items()
+            route_id: route.as_manifest() for route_id, route in event_routes.items()
         },
         "accounts": accounts,
         "components": components,
@@ -642,14 +662,20 @@ class LaunchRuntimeApplication:
                     ),
                 },
                 **(
-                    {"reference": {
-                        "socket": str(self.workspace.paths.process_socket("reference")),
-                        "health": str(self.workspace.paths.health_file("reference")),
-                        "database": str(self.workspace.paths.reference_database()),
-                        "actor_id": "reference-actor",
-                        "required": True,
-                        "event_route": workspace_event_route.route_id,
-                    }}
+                    {
+                        "reference": {
+                            "socket": str(
+                                self.workspace.paths.process_socket("reference")
+                            ),
+                            "health": str(
+                                self.workspace.paths.health_file("reference")
+                            ),
+                            "database": str(self.workspace.paths.reference_database()),
+                            "actor_id": "reference-actor",
+                            "required": True,
+                            "event_route": workspace_event_route.route_id,
+                        }
+                    }
                     if reference_required
                     else {}
                 ),
@@ -759,17 +785,7 @@ class LaunchRuntimeApplication:
         path = self.workspace.instance(mode, launch_id, resolved_instance).state(
             "backtest", "report.json"
         )
-        try:
-            value = json.loads(path.read_text(encoding="utf-8"))
-        except FileNotFoundError as error:
-            raise LaunchRuntimeError(
-                f"backtest report is not available: {path}"
-            ) from error
-        except json.JSONDecodeError as error:
-            raise LaunchRuntimeError(f"backtest report is invalid: {path}") from error
-        if not isinstance(value, dict):
-            raise LaunchRuntimeError(f"backtest report must be an object: {path}")
-        return value
+        return _load_backtest_report(path)
 
     def logs(
         self, launch_id: str, *, instance: str | None = None, lines: int = 200
@@ -842,7 +858,12 @@ class LaunchRuntimeApplication:
         value: dict[str, Any] = {}
         while time.monotonic() < deadline:
             value = LaunchControlApplication(self.workspace).status(target)
-            if value.get("status") in {"not_running", "stopped", "failed"}:
+            if value.get("status") in {
+                "not_running",
+                "stopped",
+                "failed",
+                "completed",
+            }:
                 break
             time.sleep(0.1)
         else:
@@ -855,24 +876,34 @@ class LaunchRuntimeApplication:
             stop_strategy=False,
             stop_market=True,
         )
-        state = (
-            "completed"
-            if value.get("status") in {"not_running", "stopped"}
-            else "failed"
-        )
+        report_path = instance_workspace.state("backtest", "report.json")
+        report_value: dict[str, Any] | None = None
+        report_error: str | None = None
+        if report_path.is_file():
+            try:
+                report_value = _load_backtest_report(report_path)
+            except LaunchRuntimeError as error:
+                report_error = str(error)
+
+        control_status = str(value.get("status") or "unknown")
+        registry_state = str(value.get("registry_state") or "unknown")
+        failure_reason: str | None = None
+        if control_status == "failed":
+            failure_reason = "launch control reported a failed backtest"
+        elif registry_state == "failed":
+            failure_reason = "launch startup or runtime was previously marked failed"
+        elif report_error is not None:
+            failure_reason = report_error
+        elif report_value is None:
+            failure_reason = f"backtest finished without a report: {report_path}"
+        state = "failed" if failure_reason is not None else "completed"
         LaunchRegistryApplication(self.workspace).update_state(
             launch_id,
             mode=mode,
             instance_id=resolved_instance,
             state=state,
         )
-        report_path = instance_workspace.state("backtest", "report.json")
-        report_value = (
-            json.loads(report_path.read_text(encoding="utf-8"))
-            if report_path.is_file()
-            else None
-        )
-        return {
+        result = {
             "status": state,
             "launch_id": launch_id,
             "instance_id": resolved_instance,
@@ -885,6 +916,9 @@ class LaunchRuntimeApplication:
                 else f"kairos launch logs {launch_id}"
             ),
         }
+        if failure_reason is not None:
+            result["failure_reason"] = failure_reason
+        return result
 
     def component_status(
         self, instance_workspace: InstanceWorkspace

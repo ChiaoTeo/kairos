@@ -1,0 +1,15 @@
+include "common.fbs";
+
+namespace kairos.reference.v3;
+
+table Listing {
+  listing_id:string (required);
+  instrument_id:string (required);
+  listing_venue_id:string (required);
+  market_segment_id:string;
+  listing_symbol:string (required);
+  listing_role:ListingRole = UNKNOWN;
+  status:ReferenceLifecycleStatus = UNKNOWN;
+  effective_from_unix_nanos:ulong;
+  effective_to_unix_nanos:ulong;
+}

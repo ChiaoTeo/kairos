@@ -8,7 +8,7 @@ queries a strategy may read; they neither own DTOs nor construct owner types.
 from __future__ import annotations
 
 from contextlib import AbstractContextManager
-from typing import Protocol, Sequence, overload
+from typing import Protocol, Sequence
 
 from kairospy.primitives.decimal import (
     MoneyLike,
@@ -23,6 +23,7 @@ from kairospy.primitives.reference import (
     InstrumentId,
     ListingId,
     MarketId,
+    VenueId,
 )
 
 
@@ -151,25 +152,22 @@ class Market(Protocol):
     def id(self) -> MarketId: ...
 
     @property
-    def instrument(self) -> InstrumentRef: ...
+    def instrument_id(self) -> InstrumentId: ...
 
     @property
-    def listing_id(self) -> ListingId | None: ...
+    def origin_listing_id(self) -> ListingId | None: ...
 
     @property
-    def exchange_id(self) -> ExchangeId: ...
-
-    @property
-    def instrument_kind(self) -> str: ...
+    def execution_venue_id(self) -> VenueId: ...
 
     @property
     def venue_symbol(self) -> str | None: ...
 
     @property
-    def base_asset(self) -> AssetId | None: ...
+    def base_asset_id(self) -> AssetId | None: ...
 
     @property
-    def quote_asset(self) -> AssetId | None: ...
+    def quote_asset_id(self) -> AssetId | None: ...
 
     @property
     def status(self) -> str: ...
@@ -187,7 +185,7 @@ class Reference(Protocol):
     @property
     def event_sequence(self) -> int | None: ...
 
-    def snapshot(self) -> AbstractContextManager[Reference]: ...
+    def read_session(self) -> AbstractContextManager[Reference]: ...
 
     def find_exchanges(
         self,
@@ -281,17 +279,7 @@ class Reference(Protocol):
         offset: int = 0,
     ) -> tuple[Market, ...]: ...
 
-    @overload
     def require_market(self, market_id: MarketId, /) -> Market: ...
-
-    @overload
-    def require_market(
-        self,
-        *,
-        symbol: str,
-        exchange: str,
-        instrument_kind: str,
-    ) -> Market: ...
 
     def market(self, market_id: MarketId) -> Market | None: ...
 

@@ -290,6 +290,14 @@ class ReferencePublicationRuntimeStatus:
 @dataclass(frozen=True, slots=True)
 class ReferenceCoverageRuntimeStatus:
     option_underlyings: tuple[InstrumentIdRead, ...]
+    coverage_count: int
+    usable_coverage_count: int
+    stale_coverage_count: int
+    unavailable_coverage_count: int
+    unresolved_venue_mapping_count: int
+    v2_unprojectable_market_count: int
+    canonical_conflict_count: int
+    canonical_conflict_counts: Mapping[str, int]
 
     @classmethod
     def from_mapping(cls, value: object) -> ReferenceCoverageRuntimeStatus:
@@ -298,7 +306,35 @@ class ReferenceCoverageRuntimeStatus:
         if not isinstance(values, list):
             raise ValueError("Reference option underlyings must be a list")
         return cls(
-            tuple(InstrumentIdRead(_text(item, "option_underlying")) for item in values)
+            tuple(InstrumentIdRead(_text(item, "option_underlying")) for item in values),
+            _integer(row.get("coverage_count", 0), "coverage_count"),
+            _integer(
+                row.get("usable_coverage_count", 0), "usable_coverage_count"
+            ),
+            _integer(row.get("stale_coverage_count", 0), "stale_coverage_count"),
+            _integer(
+                row.get("unavailable_coverage_count", 0),
+                "unavailable_coverage_count",
+            ),
+            _integer(
+                row.get("unresolved_venue_mapping_count", 0),
+                "unresolved_venue_mapping_count",
+            ),
+            _integer(
+                row.get("v2_unprojectable_market_count", 0),
+                "v2_unprojectable_market_count",
+            ),
+            _integer(
+                row.get("canonical_conflict_count", 0),
+                "canonical_conflict_count",
+            ),
+            {
+                str(kind): _integer(count, f"canonical_conflict_counts.{kind}")
+                for kind, count in _mapping(
+                    row.get("canonical_conflict_counts", {}),
+                    "canonical_conflict_counts",
+                ).items()
+            },
         )
 
 
@@ -393,7 +429,7 @@ class ReferenceSourceRuntimeStatus:
     desired_state: ReferenceSourceDesiredState | None
     sync_policy: ReferenceSourceSyncPolicy | None
     scope: ReferenceSourceScope | None
-    credential_binding_present: bool | None
+    connection_id_present: bool | None
     phase: ReferenceSourcePhase
     progress: ReferenceSourceProgress
     work_item: ReferenceSourceWorkItem
@@ -434,7 +470,7 @@ class ReferenceSourceRuntimeStatus:
             ),
             None if scope is None else ReferenceSourceScope.from_mapping(scope),
             _optional_boolean(
-                row.get("credential_binding_present"), "credential_binding_present"
+                row.get("connection_id_present"), "connection_id_present"
             ),
             ReferenceSourcePhase(_text(row.get("phase"), "source.phase")),
             ReferenceSourceProgress.from_mapping(row.get("progress")),
@@ -582,7 +618,7 @@ class ReferenceCatalogIntegrity:
 
 
 @dataclass(frozen=True, slots=True)
-class ReferenceCatalogSnapshot:
+class ReferenceCatalogStatus:
     generation: GenerationRead
     event_sequence: SequenceRead
     catalog: ReferenceCatalogCounts
@@ -706,7 +742,7 @@ __all__ = [
     "ReferenceCatalogCounts",
     "ReferenceCatalogIntegrity",
     "ReferenceCatalogRuntimeStatus",
-    "ReferenceCatalogSnapshot",
+    "ReferenceCatalogStatus",
     "ReferenceCoverageRuntimeStatus",
     "ReferenceDiagnostic",
     "ReferenceDiagnosticSeverity",

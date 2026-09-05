@@ -3,8 +3,8 @@ use kairos_primitives::execution::{ExecutionRouteId, LegId, OrderId};
 use kairos_primitives::time::UnixNanos;
 
 use super::{
-    AlgorithmAction, AlgorithmActionStatus, AlgorithmDecisionSequence, AlgorithmExecutionStyle,
-    AlgorithmRun, AlgorithmRunStatus,
+    AlgorithmAction, AlgorithmActionStatus, AlgorithmDecisionSequence, AlgorithmError,
+    AlgorithmExecutionStyle, AlgorithmRun, AlgorithmRunStatus,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -32,23 +32,25 @@ pub struct AlgorithmDecision {
 }
 
 impl AlgorithmRun {
-    pub fn apply_decision(&mut self, decision: AlgorithmDecision) -> Result<(), String> {
+    pub fn apply_decision(&mut self, decision: AlgorithmDecision) -> Result<(), AlgorithmError> {
         if decision.expected_sequence != self.decision_sequence {
-            return Err(format!(
-                "stale algorithm decision: expected {}, current {}",
-                decision.expected_sequence, self.decision_sequence
-            ));
+            return Err(AlgorithmError::StaleDecision {
+                expected: decision.expected_sequence,
+                current: self.decision_sequence,
+            });
         }
         if self
             .last_decision_at
             .is_some_and(|current| decision.decided_at < current)
         {
-            return Err("algorithm business time cannot move backwards".into());
+            return Err(AlgorithmError::BusinessTimeRegression);
         }
-        let next_sequence = self
-            .decision_sequence
-            .checked_next()
-            .ok_or_else(|| "algorithm decision sequence overflow".to_string())?;
+        let next_sequence =
+            self.decision_sequence
+                .checked_next()
+                .ok_or(AlgorithmError::Overflow {
+                    operation: "decision sequence increment",
+                })?;
         for (index, kind) in decision.actions.into_iter().enumerate() {
             self.actions.push(AlgorithmAction {
                 action_id: format!(
@@ -72,14 +74,18 @@ impl AlgorithmRun {
         &mut self,
         action_id: &str,
         status: AlgorithmActionStatus,
-    ) -> Result<(), String> {
+    ) -> Result<(), AlgorithmError> {
         let action = self
             .actions
             .iter_mut()
             .find(|action| action.action_id == action_id)
-            .ok_or_else(|| "unknown algorithm action".to_string())?;
+            .ok_or_else(|| AlgorithmError::UnknownAction {
+                action_id: action_id.to_owned(),
+            })?;
         if action.status != AlgorithmActionStatus::Pending {
-            return Err("algorithm action is already resolved".into());
+            return Err(AlgorithmError::ResolvedAction {
+                action_id: action_id.to_owned(),
+            });
         }
         action.status = status;
         Ok(())

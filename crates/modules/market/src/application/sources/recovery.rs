@@ -713,6 +713,8 @@ mod tests {
             bid_quantity: Some("1".parse().unwrap()),
             ask_price: Some("101".parse().unwrap()),
             ask_quantity: Some("1".parse().unwrap()),
+            bid_venue_id: None,
+            ask_venue_id: None,
             bid_venue_code: None,
             ask_venue_code: None,
             tape: None,

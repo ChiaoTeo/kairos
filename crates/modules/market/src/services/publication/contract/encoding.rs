@@ -163,6 +163,14 @@ fn encode_observation(
                 .ask_venue_code
                 .as_deref()
                 .map(|value| b.create_string(value));
+            let bid_venue_id = value
+                .bid_venue_id
+                .as_ref()
+                .map(|value| b.create_string(value.as_str()));
+            let ask_venue_id = value
+                .ask_venue_id
+                .as_ref()
+                .map(|value| b.create_string(value.as_str()));
             let payload = fb::Quote::create(
                 &mut b,
                 &fb::QuoteArgs {
@@ -174,6 +182,8 @@ fn encode_observation(
                     bid_quantity: bid_quantity.as_ref(),
                     ask_price: ask_price.as_ref(),
                     ask_quantity: ask_quantity.as_ref(),
+                    bid_venue_id,
+                    ask_venue_id,
                     bid_venue_code,
                     ask_venue_code,
                     tape: value.tape.unwrap_or_default(),
@@ -1007,29 +1017,44 @@ mod tests {
 
     #[test]
     fn quote_event_is_a_v2_root() {
-        let quote = Quote {
-            scope: crate::ObservationScope::market("market:btc").unwrap(),
-            instrument_id: InstrumentId::new("instrument:btc").unwrap(),
-            bid_price: Some("1".parse::<Price>().unwrap()),
-            bid_quantity: Some("2".parse::<Quantity>().unwrap()),
-            ask_price: None,
-            ask_quantity: None,
-            bid_venue_code: None,
-            ask_venue_code: None,
-            tape: None,
-            observed_at_unix_nanos: UnixNanos::new(7),
-            provider: kairos_primitives::market::Provider::new("source").unwrap(),
-        };
-        let bytes = encode_event(
-            "market",
-            1,
-            &InstanceIdentity::default(),
-            1,
-            &MarketEvent::Observation(crate::domain::observation::MarketObservation::Quote(quote)),
-        )
-        .unwrap();
-        assert!(decode_event(&bytes).is_ok());
-        assert_eq!(&bytes[4..8], b"MQU2");
+        for known in [false, true] {
+            let quote = Quote {
+                scope: crate::ObservationScope::market("market:btc").unwrap(),
+                instrument_id: InstrumentId::new("instrument:btc").unwrap(),
+                bid_price: Some("1".parse::<Price>().unwrap()),
+                bid_quantity: Some("2".parse::<Quantity>().unwrap()),
+                ask_price: None,
+                ask_quantity: None,
+                bid_venue_id: known
+                    .then(|| kairos_primitives::reference::VenueId::new("venue:bid").unwrap()),
+                ask_venue_id: known
+                    .then(|| kairos_primitives::reference::VenueId::new("venue:ask").unwrap()),
+                bid_venue_code: Some("19".into()),
+                ask_venue_code: Some("11".into()),
+                tape: None,
+                observed_at_unix_nanos: UnixNanos::new(7),
+                provider: kairos_primitives::market::Provider::new("source").unwrap(),
+            };
+            let bytes = encode_event(
+                "market",
+                1,
+                &InstanceIdentity::default(),
+                1,
+                &MarketEvent::Observation(crate::domain::observation::MarketObservation::Quote(
+                    quote,
+                )),
+            )
+            .unwrap();
+            assert!(decode_event(&bytes).is_ok());
+            assert_eq!(&bytes[4..8], b"MQU2");
+            let root =
+                kairos_protocol::generated::kairos::market::v_2::root_as_quote_updated(&bytes)
+                    .unwrap();
+            assert_eq!(root.quote().bid_venue_id(), known.then_some("venue:bid"));
+            assert_eq!(root.quote().ask_venue_id(), known.then_some("venue:ask"));
+            assert_eq!(root.quote().bid_venue_code(), Some("19"));
+            assert_eq!(root.quote().ask_venue_code(), Some("11"));
+        }
     }
 
     #[test]

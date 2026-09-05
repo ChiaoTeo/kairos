@@ -3,10 +3,10 @@
 use kairos_primitives::decimal::{Money, Price, Quantity};
 use kairos_primitives::market::Provider;
 use kairos_primitives::reference::{
-    AssetClass, AssetId, ExchangeId, InstrumentId, InstrumentKind, IssuerId, ListingId, MarketId,
-    ReferenceSourceId, ReferenceStatus, Symbol,
+    AssetClass, AssetId, ExchangeId, InstrumentId, InstrumentKind, IssuerId, JurisdictionCode,
+    ListingId, MarketId, MarketSegmentId, Mic, ReferenceCoverageId, ReferenceSourceId,
+    ReferenceStatus, Symbol, TradingCalendarId, TradingSessionId, VenueId,
 };
-use kairos_primitives::runtime::{ActorId, InstanceId, LaunchId, WorkspaceId};
 use kairos_primitives::time::{Generation, Sequence, UnixNanos};
 use serde::{Deserialize, Serialize};
 
@@ -14,6 +14,110 @@ use serde::{Deserialize, Serialize};
 pub struct Exchange {
     pub exchange_id: ExchangeId,
     pub name: String,
+    pub status: ReferenceStatus,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VenueKind {
+    RegulatedExchange,
+    RegulatedMarket,
+    TradingPlatform,
+    Ats,
+    Pts,
+    OtcFacility,
+    Dealer,
+    TradeReportingFacility,
+    #[default]
+    Unknown,
+}
+
+impl VenueKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::RegulatedExchange => "regulated_exchange",
+            Self::RegulatedMarket => "regulated_market",
+            Self::TradingPlatform => "trading_platform",
+            Self::Ats => "ats",
+            Self::Pts => "pts",
+            Self::OtcFacility => "otc_facility",
+            Self::Dealer => "dealer",
+            Self::TradeReportingFacility => "trade_reporting_facility",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+impl std::fmt::Display for VenueKind {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VenueRole {
+    Listing,
+    Execution,
+    Reporting,
+}
+
+impl VenueRole {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Listing => "listing",
+            Self::Execution => "execution",
+            Self::Reporting => "reporting",
+        }
+    }
+}
+
+/// A canonical place or facility that can list, execute, or report trades.
+/// Providers are not venues unless they actually operate such a facility.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Venue {
+    pub venue_id: VenueId,
+    pub name: String,
+    pub venue_kind: VenueKind,
+    pub roles: std::collections::BTreeSet<VenueRole>,
+    pub mic: Option<Mic>,
+    pub operating_mic: Option<Mic>,
+    pub parent_venue_id: Option<VenueId>,
+    pub jurisdiction: Option<JurisdictionCode>,
+    pub status: ReferenceStatus,
+}
+
+/// The provider-native namespace in which one raw venue identifier appears.
+/// Trade and quote exchange identifiers intentionally share one namespace;
+/// reporting-facility identifiers do not.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VenueIdentifierKind {
+    Exchange,
+    ReportingFacility,
+    Mic,
+}
+
+impl VenueIdentifierKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Exchange => "exchange",
+            Self::ReportingFacility => "reporting_facility",
+            Self::Mic => "mic",
+        }
+    }
+}
+
+/// A Reference-owned mapping from provider-native observation evidence to a
+/// canonical venue. It does not assert that any instrument is listed there.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct VenueIdentifierMapping {
+    pub source_id: ReferenceSourceId,
+    pub provider: Provider,
+    pub provider_product: String,
+    pub identifier_kind: VenueIdentifierKind,
+    pub identifier: String,
+    pub venue_id: VenueId,
     pub status: ReferenceStatus,
 }
 
@@ -39,6 +143,8 @@ pub struct Instrument {
     pub issuer_id: Option<IssuerId>,
     pub share_class: Option<String>,
     pub primary_currency_asset_id: Option<AssetId>,
+    #[serde(default)]
+    pub settlement_asset_id: Option<AssetId>,
     pub underlying_instrument_id: Option<InstrumentId>,
     pub expiry_unix_nanos: Option<UnixNanos>,
     pub strike: Option<Price>,
@@ -54,6 +160,178 @@ pub struct Instrument {
 pub struct ReferenceInstrumentAvailability {
     pub source_id: ReferenceSourceId,
     pub instrument: Instrument,
+}
+
+/// A provider catalog's claim that it currently contains an instrument. It
+/// does not imply a listing, an execution venue, or an installed runtime route.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ProviderCatalogMembership {
+    pub source_id: ReferenceSourceId,
+    pub instrument_id: InstrumentId,
+    pub provider_symbol: Option<String>,
+    pub provider_product: Option<String>,
+    pub status: ReferenceStatus,
+    pub effective_from_unix_nanos: UnixNanos,
+    pub effective_to_unix_nanos: Option<UnixNanos>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReferenceFactKind {
+    Venue,
+    Asset,
+    Instrument,
+    Listing,
+    Market,
+    ProviderCatalogMembership,
+    VenueIdentifierMapping,
+    TradingRules,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ReferenceCoverageScope {
+    ProviderCatalog {
+        binding: crate::ReferenceSourceBinding,
+    },
+    VenueListings {
+        venue_ids: Vec<VenueId>,
+        instrument_kind: InstrumentKind,
+    },
+    VenueMarkets {
+        venue_ids: Vec<VenueId>,
+        instrument_kind: InstrumentKind,
+    },
+    UnderlyingOptions {
+        underlying_instrument_ids: Vec<InstrumentId>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CoverageCompleteness {
+    #[default]
+    Unknown,
+    Partial,
+    CompleteForDeclaredScope,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CoverageState {
+    #[default]
+    NotConfigured,
+    Waiting,
+    Scanning,
+    Promoting,
+    Usable,
+    Stale,
+    RetryWaiting,
+    Paused,
+    Unavailable,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ReferenceCoverage {
+    pub coverage_id: ReferenceCoverageId,
+    pub source_id: ReferenceSourceId,
+    pub fact_kinds: std::collections::BTreeSet<ReferenceFactKind>,
+    pub scope: ReferenceCoverageScope,
+    pub completeness: CoverageCompleteness,
+    pub state: CoverageState,
+    pub generation: Option<Generation>,
+    pub event_sequence: Option<Sequence>,
+    pub last_attempt_unix_nanos: Option<UnixNanos>,
+    pub last_success_unix_nanos: Option<UnixNanos>,
+    pub stale_after_unix_nanos: Option<UnixNanos>,
+    pub has_last_known_good: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReferenceKnowledgeConclusion {
+    Found,
+    NotFoundInCoveredScope,
+    #[default]
+    UnknownOutsideCoverage,
+    Preparing,
+    KnownButStale,
+    SourceUnavailable,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ListingRole {
+    Primary,
+    Secondary,
+    CrossListing,
+    AdmissionWithoutPrimaryDesignation,
+    #[default]
+    Unknown,
+}
+
+impl ListingRole {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Primary => "primary",
+            Self::Secondary => "secondary",
+            Self::CrossListing => "cross_listing",
+            Self::AdmissionWithoutPrimaryDesignation => "admission_without_primary_designation",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+impl std::fmt::Display for ListingRole {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+/// v3 listing semantics: formal admission belongs to a listing venue and is
+/// independent from the facilities where trades execute.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct VenueListing {
+    pub listing_id: ListingId,
+    pub instrument_id: InstrumentId,
+    pub listing_venue_id: VenueId,
+    pub market_segment_id: Option<MarketSegmentId>,
+    pub listing_symbol: Symbol,
+    pub listing_role: ListingRole,
+    pub status: ReferenceStatus,
+    pub effective_from_unix_nanos: UnixNanos,
+    pub effective_to_unix_nanos: Option<UnixNanos>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TradingRules {
+    pub price_tick: Option<Price>,
+    pub quantity_tick: Option<Quantity>,
+    pub price_precision: i32,
+    pub quantity_precision: i32,
+    pub minimum_quantity: Option<Quantity>,
+    pub minimum_notional: Option<Money>,
+    pub contract_size: Option<Quantity>,
+}
+
+/// v3 market semantics: one independently addressable liquidity or execution
+/// entry point. A broker SOR and a data-vendor route are not canonical markets.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct VenueMarket {
+    pub market_id: MarketId,
+    pub instrument_id: InstrumentId,
+    pub execution_venue_id: VenueId,
+    pub origin_listing_id: Option<ListingId>,
+    pub market_segment_id: Option<MarketSegmentId>,
+    pub venue_symbol: Option<Symbol>,
+    pub trading_calendar_id: Option<TradingCalendarId>,
+    pub trading_session_ids: Vec<TradingSessionId>,
+    pub base_asset_id: Option<AssetId>,
+    pub quote_asset_id: Option<AssetId>,
+    pub status: ReferenceStatus,
+    pub trading_rules: TradingRules,
+    pub effective_from_unix_nanos: UnixNanos,
+    pub effective_to_unix_nanos: Option<UnixNanos>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -112,195 +390,4 @@ pub struct LifecycleEntry {
     pub provenance: Option<String>,
     #[serde(default)]
     pub conflict_policy: Option<String>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ReferenceCatalogSnapshot {
-    pub actor_id: ActorId,
-    pub workspace_id: WorkspaceId,
-    pub launch_id: Option<LaunchId>,
-    pub instance_id: Option<InstanceId>,
-    pub generation: Generation,
-    pub event_sequence: Sequence,
-    pub exchanges: Vec<Exchange>,
-    pub assets: Vec<Asset>,
-    pub instruments: Vec<Instrument>,
-    pub listings: Vec<Listing>,
-    pub markets: Vec<Market>,
-    pub provider_health: Vec<ProviderHealthState>,
-    pub option_underlyings: Vec<InstrumentId>,
-    pub lifecycle_events: Vec<LifecycleEntry>,
-}
-
-impl Default for ReferenceCatalogSnapshot {
-    fn default() -> Self {
-        Self {
-            actor_id: ActorId::new("reference:unscoped").expect("valid reference actor"),
-            workspace_id: WorkspaceId::new("workspace:unscoped").expect("valid workspace"),
-            launch_id: None,
-            instance_id: None,
-            generation: Generation::default(),
-            event_sequence: Sequence::default(),
-            exchanges: Vec::new(),
-            assets: Vec::new(),
-            instruments: Vec::new(),
-            listings: Vec::new(),
-            markets: Vec::new(),
-            provider_health: Vec::new(),
-            option_underlyings: Vec::new(),
-            lifecycle_events: Vec::new(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct MarketReferenceSnapshot {
-    pub actor_id: ActorId,
-    pub workspace_id: WorkspaceId,
-    pub launch_id: Option<LaunchId>,
-    pub instance_id: Option<InstanceId>,
-    pub generation: Generation,
-    pub event_sequence: Sequence,
-    pub instruments: Vec<Instrument>,
-    pub markets: Vec<Market>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ExecutionReferenceSnapshot {
-    pub actor_id: ActorId,
-    pub workspace_id: WorkspaceId,
-    pub launch_id: Option<LaunchId>,
-    pub instance_id: Option<InstanceId>,
-    pub generation: Generation,
-    pub event_sequence: Sequence,
-    pub instruments: Vec<Instrument>,
-    pub markets: Vec<Market>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AccountReferenceSnapshot {
-    pub actor_id: ActorId,
-    pub workspace_id: WorkspaceId,
-    pub launch_id: Option<LaunchId>,
-    pub instance_id: Option<InstanceId>,
-    pub generation: Generation,
-    pub event_sequence: Sequence,
-    pub instruments: Vec<Instrument>,
-    pub markets: Vec<Market>,
-}
-
-macro_rules! impl_consumer_snapshot_default {
-    ($snapshot:ty) => {
-        impl Default for $snapshot {
-            fn default() -> Self {
-                Self {
-                    actor_id: ActorId::new("reference:unscoped").expect("valid reference actor"),
-                    workspace_id: WorkspaceId::new("workspace:unscoped").expect("valid workspace"),
-                    launch_id: None,
-                    instance_id: None,
-                    generation: Generation::default(),
-                    event_sequence: Sequence::default(),
-                    instruments: Vec::new(),
-                    markets: Vec::new(),
-                }
-            }
-        }
-    };
-}
-
-impl_consumer_snapshot_default!(MarketReferenceSnapshot);
-impl_consumer_snapshot_default!(ExecutionReferenceSnapshot);
-impl_consumer_snapshot_default!(AccountReferenceSnapshot);
-
-impl ReferenceCatalogSnapshot {
-    /// Catalog facts consumed by Market. Operational health, history and
-    /// unrelated catalog records are deliberately excluded.
-    pub fn for_market(&self) -> MarketReferenceSnapshot {
-        let markets = self
-            .markets
-            .iter()
-            .filter(|value| active(value.status))
-            .cloned()
-            .collect::<Vec<_>>();
-        let instrument_ids = markets
-            .iter()
-            .map(|value| value.instrument_id.clone())
-            .collect::<std::collections::BTreeSet<_>>();
-        MarketReferenceSnapshot {
-            actor_id: self.actor_id.clone(),
-            workspace_id: self.workspace_id.clone(),
-            launch_id: self.launch_id.clone(),
-            instance_id: self.instance_id.clone(),
-            generation: self.generation,
-            event_sequence: self.event_sequence,
-            instruments: self
-                .instruments
-                .iter()
-                .filter(|value| instrument_ids.contains(value.instrument_id.as_str()))
-                .cloned()
-                .collect(),
-            markets,
-        }
-    }
-
-    /// Catalog facts consumed by Execution for admission and provider address
-    /// resolution.
-    pub fn for_execution(&self) -> ExecutionReferenceSnapshot {
-        let markets = self
-            .markets
-            .iter()
-            .filter(|value| active(value.status))
-            .cloned()
-            .collect::<Vec<_>>();
-        let instruments = self
-            .instruments
-            .iter()
-            .filter(|value| active(value.status))
-            .cloned()
-            .collect();
-        ExecutionReferenceSnapshot {
-            actor_id: self.actor_id.clone(),
-            workspace_id: self.workspace_id.clone(),
-            launch_id: self.launch_id.clone(),
-            instance_id: self.instance_id.clone(),
-            generation: self.generation,
-            event_sequence: self.event_sequence,
-            instruments,
-            markets,
-        }
-    }
-
-    /// Catalog facts consumed by Account to map provider observations to
-    /// canonical instrument and market identity.
-    pub fn for_account(&self) -> AccountReferenceSnapshot {
-        let markets = self
-            .markets
-            .iter()
-            .filter(|value| active(value.status))
-            .cloned()
-            .collect::<Vec<_>>();
-        let instrument_ids = markets
-            .iter()
-            .map(|value| value.instrument_id.clone())
-            .collect::<std::collections::BTreeSet<_>>();
-        AccountReferenceSnapshot {
-            actor_id: self.actor_id.clone(),
-            workspace_id: self.workspace_id.clone(),
-            launch_id: self.launch_id.clone(),
-            instance_id: self.instance_id.clone(),
-            generation: self.generation,
-            event_sequence: self.event_sequence,
-            instruments: self
-                .instruments
-                .iter()
-                .filter(|value| instrument_ids.contains(value.instrument_id.as_str()))
-                .cloned()
-                .collect(),
-            markets,
-        }
-    }
-}
-
-fn active(status: ReferenceStatus) -> bool {
-    matches!(status, ReferenceStatus::Active | ReferenceStatus::Trading)
 }

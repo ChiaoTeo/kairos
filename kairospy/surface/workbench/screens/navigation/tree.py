@@ -22,6 +22,7 @@ from .catalog import (
     CATALOG_INSTRUMENT_ACTIONS,
     HOME_ACTIONS,
     MISSING_MARKET_ACTIONS,
+    COVERED_EMPTY_MARKET_ACTIONS,
     RESUME_MARKET_SEARCH_ACTION,
     SECTION_ACTIONS,
     SECTION_LABELS,
@@ -646,8 +647,17 @@ def context_items(session: GuidedSession, state: Any) -> tuple[ActionItem, ...]:
         )
     if session.context == Routes.MARKET_PROVIDERS:
         return market_provider_actions(session.market.routes)
+    if session.context == Routes.MARKET_INTENT:
+        return tuple(
+            ActionItem(f"intent:{index}", label, description, str(index + 1))
+            for index, (_query, label, description) in enumerate(
+                session.market.intent_choices
+            )
+        )
     if session.context == Routes.MARKET_MISSING:
         return MISSING_MARKET_ACTIONS
+    if session.context == Routes.MARKET_NOT_FOUND:
+        return COVERED_EMPTY_MARKET_ACTIONS
     if session.context == Routes.MARKET_CATALOG_EXCHANGE:
         return CATALOG_EXCHANGE_ACTIONS
     if session.context == Routes.MARKET_CATALOG_INSTRUMENT:
@@ -791,7 +801,9 @@ def context_label(context: NavigationContext, root_label: str = "首页") -> str
         labels: Mapping[NavigationContext, str] = {
             Routes.MARKET_SELECTED: "已选标的",
             Routes.MARKET_PROVIDERS: "选择数据源",
-            Routes.MARKET_MISSING: "未找到标的",
+            Routes.MARKET_INTENT: "确认你要找的内容",
+            Routes.MARKET_MISSING: "标的查询状态",
+            Routes.MARKET_NOT_FOUND: "已覆盖范围内未找到",
             Routes.MARKET_CATALOG_EXCHANGE: "选择市场或交易服务",
             Routes.MARKET_CATALOG_INSTRUMENT: "选择品种",
             Routes.MARKET_CATALOG_SETUP: "准备标的目录",

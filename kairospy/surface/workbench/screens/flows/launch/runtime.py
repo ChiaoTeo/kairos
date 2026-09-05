@@ -688,12 +688,22 @@ def handle_success(
             session.context = Routes.STRATEGY_TIMELINE
         elif kind is ResultKind.STRATEGY_ATTACH:
             session.context = Routes.STRATEGY_ATTACH
+    result_status = (
+        str(result.get("status") or "").lower() if isinstance(result, Mapping) else ""
+    )
     outcome = (
         ActivityOutcome.ATTENTION
-        if isinstance(result, Mapping) and result.get("status") == "preview"
+        if result_status == "preview"
+        else ActivityOutcome.FAILURE
+        if result_status == "failed"
         else ActivityOutcome.SUCCESS
     )
-    return _activity(spec, body, outcome), *_choice(state, session, status="操作已完成")
+    status = (
+        "操作失败 · 请按结果提示恢复"
+        if outcome is ActivityOutcome.FAILURE
+        else "操作已完成"
+    )
+    return _activity(spec, body, outcome), *_choice(state, session, status=status)
 
 
 def _launch_detail(title: str, value: Mapping[str, Any]) -> RenderableType:
@@ -711,14 +721,20 @@ def _launch_detail(title: str, value: Mapping[str, Any]) -> RenderableType:
         "socket": "控制连接",
         "path": "路径",
         "detail": "说明",
+        "failure_reason": "失败原因",
+        "next_action": "下一步",
     }
     rows = tuple(
         (label, _launch_value(value[key]))
         for key, label in labels.items()
         if key in value and value[key] is not None
     )
+    failed = str(value.get("status") or "").lower() == "failed"
     return Group(
-        conclusion(f"{title}已就绪"),
+        conclusion(
+            f"{title}{'失败' if failed else '已就绪'}",
+            tone=ResultTone.ERROR if failed else ResultTone.NEUTRAL,
+        ),
         facts(rows) if rows else Text("没有更多业务字段", style="dim"),
     )
 

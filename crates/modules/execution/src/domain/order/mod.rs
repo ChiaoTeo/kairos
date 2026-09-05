@@ -10,12 +10,14 @@ use serde::{Deserialize, Serialize};
 
 mod commitment;
 mod entity;
+mod error;
 mod fill;
 mod reservation;
 mod route;
 
 pub use commitment::*;
 pub use entity::*;
+pub use error::*;
 pub use fill::*;
 pub use reservation::*;
 pub use route::*;

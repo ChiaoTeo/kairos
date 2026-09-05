@@ -28,6 +28,15 @@ from .models import NotificationDestination
 NotificationProvider = Literal["feishu", "telegram"]
 
 
+def notification_provider(value: object) -> NotificationProvider:
+    provider = str(value).strip().lower()
+    if provider == "feishu":
+        return "feishu"
+    if provider == "telegram":
+        return "telegram"
+    raise ValueError(f"unsupported notification provider: {provider}")
+
+
 @dataclass(frozen=True, slots=True)
 class PreparedNotificationDestination:
     workspace: Workspace
@@ -57,7 +66,7 @@ class NotificationAdminApplication:
         if not configured.get("enabled", False):
             raise ValueError(f"notification destination is disabled: {destination_id}")
 
-        provider = str(configured.get("provider", ""))
+        provider = notification_provider(configured.get("provider", ""))
         credential_id = str(configured.get("credential_id", ""))
         secret = self._resolved_credential_secret(credential_id, provider)
         settings = (
@@ -67,7 +76,7 @@ class NotificationAdminApplication:
         )
         destination = NotificationDestination(
             destination_id,
-            provider,  # type: ignore[arg-type]
+            provider,
             credential_id=credential_id,
             settings=settings,
             secrets={"webhook_url" if provider == "feishu" else "bot_token": secret},
@@ -548,4 +557,5 @@ __all__ = [
     "NotificationAdminApplication",
     "PreparedNotificationDestination",
     "NotificationProvider",
+    "notification_provider",
 ]

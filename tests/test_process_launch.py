@@ -3,10 +3,12 @@ from __future__ import annotations
 from contextlib import redirect_stdout
 from io import StringIO
 import json
+import os
 import stat
 import sys
 import textwrap
 import time
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import pytest
@@ -14,6 +16,10 @@ import pytest
 from kairospy.system.apps.components.application import (
     ComponentProcessApplication,
     SystemRuntimeSupervisor,
+)
+from kairospy.system.apps.components.application.process_logging import (
+    LoggedProcess,
+    start_logged_process,
 )
 from kairospy.system.apps.workspace.application import WorkspaceApplication
 from kairospy.system.apps.workspace_services import WorkspaceServiceApplication
@@ -158,6 +164,105 @@ def test_component_start_reports_early_exit_and_log_detail(
     assert "exited during startup with code 23" in message
     assert "database migration failed" in message
     assert "kairos launch artifacts launch --instance one" in message
+
+
+def test_component_start_timeout_reaps_process_sink_and_route_declaration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        ComponentProcessApplication, "_ensure_aeron_driver", lambda _self: None
+    )
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="timed-out-start"
+    )
+    instance = workspace.instance("paper", "launch", "one")
+    instance.prepare()
+    binary = tmp_path / "never-ready-execution"
+    binary.write_text(
+        textwrap.dedent(
+            f"""
+            #!{sys.executable}
+            import time
+            time.sleep(30)
+            """
+        ).lstrip(),
+        encoding="utf-8",
+    )
+    binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
+    spawned: list[LoggedProcess] = []
+
+    def record_start(
+        command: Sequence[str],
+        *,
+        component: str,
+        log_path: Path,
+        cwd: str,
+        environment: Mapping[str, str],
+    ) -> LoggedProcess:
+        process = start_logged_process(
+            command,
+            component=component,
+            log_path=log_path,
+            cwd=cwd,
+            environment=environment,
+        )
+        spawned.append(process)
+        return process
+
+    monkeypatch.setattr(
+        "kairospy.system.apps.components.application.start_logged_process",
+        record_start,
+    )
+    application = ComponentProcessApplication(
+        workspace,
+        binaries={"execution": str(binary)},
+        ready_timeout=0.5,
+        stop_timeout=2,
+    )
+
+    with pytest.raises(TimeoutError, match="did not become ready"):
+        application.ensure_running("execution", instance_workspace=instance)
+
+    assert len(spawned) == 1
+    assert spawned[0].child.poll() is not None
+    assert spawned[0].sink.poll() is not None
+    assert not (instance.health("execution").parent / "event-route.json").exists()
+
+
+def test_aeron_start_timeout_terminates_logged_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="aeron-timeout"
+    )
+
+    class NeverReadyProcess:
+        terminated = False
+
+        @staticmethod
+        def poll() -> None:
+            return None
+
+        def terminate(self, timeout: float) -> None:
+            assert timeout == 2
+            self.terminated = True
+
+    process = NeverReadyProcess()
+    monkeypatch.setattr(
+        "kairospy.system.apps.components.application.start_logged_process",
+        lambda *_a, **_k: process,
+    )
+    application = ComponentProcessApplication(
+        workspace,
+        binaries={"aeron": "unused"},
+        ready_timeout=0.01,
+        stop_timeout=2,
+    )
+
+    with pytest.raises(TimeoutError, match="Aeron media driver did not become ready"):
+        application._ensure_aeron_driver()
+
+    assert process.terminated is True
 
 
 def test_reference_startup_logs_support_redirected_text_output(tmp_path: Path) -> None:

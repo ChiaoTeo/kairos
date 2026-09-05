@@ -352,6 +352,7 @@ fn upsert_instrument_request(
         issuer_id: None,
         share_class: None,
         primary_currency_asset_id: None,
+        settlement_asset_id: None,
     })
 }
 
@@ -771,7 +772,7 @@ impl AddProviderArgs {
                 id: self.scope_id.clone(),
             },
             desired_state: parse_source_desired_state(&self.desired_state)?,
-            credential_binding: self.credential_binding.clone(),
+            connection_id: self.connection_id.clone(),
         })
     }
 }
@@ -968,7 +969,7 @@ struct AddProviderArgs {
     #[arg(long)]
     scope_id: Option<String>,
     #[arg(long)]
-    credential_binding: Option<String>,
+    connection_id: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -1531,7 +1532,7 @@ mod tests {
 
     #[test]
     fn providers_add_builds_source_definition_request() {
-        let cli = Cli::parse_from([
+        let cli = Cli::try_parse_from([
             "kairos-reference-cli",
             "--workspace",
             ".kairos",
@@ -1544,9 +1545,10 @@ mod tests {
             "underlying_instrument",
             "--scope-id",
             "instrument:equity:US:SPY:common",
-            "--credential-binding",
-            "massive.default",
-        ]);
+            "--connection-id",
+            "massive-main",
+        ])
+        .unwrap();
 
         let command = connected(cli);
         assert!(connected_requires_runtime_control(&command));
@@ -1567,10 +1569,7 @@ mod tests {
             request.scope.id.as_deref(),
             Some("instrument:equity:US:SPY:common")
         );
-        assert_eq!(
-            request.credential_binding.as_deref(),
-            Some("massive.default")
-        );
+        assert_eq!(request.connection_id.as_deref(), Some("massive-main"));
     }
 
     #[test]

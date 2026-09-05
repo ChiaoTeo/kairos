@@ -9,7 +9,7 @@
 
 Reference 与其他 current-view owner 不同：它的权威读模型是 SQLite，而不是 LMDB 与
 FlatBuffers。Rust `kairos-reference-contract` 已拥有只读 catalog adapter、schema version、typed
-record 和 consumer snapshot，但 Python `ReferenceClient` 仍直接打开 SQLite，持有 transaction，
+record 和 bounded query，但 Python `ReferenceClient` 仍直接打开 SQLite，持有 transaction，
 拼接 SQL、命名表和索引列，并解码 JSON payload。这形成了第二套生产 contract，并让 Python
 调用方能够绕过 owner 的 schema、error 和 typed query 语义。
 
@@ -38,7 +38,7 @@ crates/modules/reference/contract/py
 - JSON persistence row 到 contract-owned typed value 的唯一 decode。
 
 Rust `ReferenceReadSession` 拥有 connection，并在 `BEGIN DEFERRED` 后立即读取 metadata，建立固定 WAL
-snapshot。它的所有查询返回 owned typed records；connection、transaction、SQL 和 JSON payload 都不
+read session。它的所有查询返回 owned typed records；connection、transaction、SQL 和 JSON payload 都不
 跨 Pyo3。关闭或析构 session 会结束 transaction。
 
 连接不带 CREATE flag，并在任何 schema/data query 之前设置 `query_only`。这是为了允许部分 SQLite

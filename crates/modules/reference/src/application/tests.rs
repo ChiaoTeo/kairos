@@ -183,7 +183,7 @@ fn one_listing_can_back_multiple_markets_on_different_exchanges() {
 async fn application_reconciles_reference_catalog() {
     let mut application = application().await;
     let result = application.refresh().await.unwrap();
-    assert_eq!(result.events.len(), 6);
+    assert_eq!(result.change_count, 9);
     assert_eq!(result.generation, 1.into());
     assert_eq!(application.catalog().markets.len(), 1);
 }
@@ -201,7 +201,7 @@ async fn application_runtime_status_exposes_tick_timing() {
     assert_eq!(status.catalog.listing_count, 1);
     assert_eq!(status.catalog.market_count, 1);
     assert_eq!(status.catalog.active_market_count, 1);
-    assert_eq!(status.catalog.lifecycle_event_count, 6);
+    assert_eq!(status.catalog.lifecycle_event_count, 9);
     assert!(!status.catalog.integrity.degraded);
     assert_eq!(status.catalog.integrity.missing_equity_market_count, 0);
     assert_eq!(status.catalog.integrity.legacy_exchange_market_id_count, 0);
@@ -393,10 +393,10 @@ async fn composition_applies_runtime_tick_budget_from_reference_config() {
 #[tokio::test]
 async fn application_does_not_emit_duplicate_events_for_same_catalog() {
     let mut application = application().await;
-    assert_eq!(application.refresh().await.unwrap().events.len(), 6);
+    assert_eq!(application.refresh().await.unwrap().change_count, 9);
     let second = application.refresh().await.unwrap();
-    assert!(second.events.is_empty());
-    assert_eq!(second.event_sequence, 6.into());
+    assert_eq!(second.change_count, 0);
+    assert_eq!(second.event_sequence, 9.into());
 }
 
 #[tokio::test]
@@ -429,7 +429,7 @@ async fn administrative_asset_upsert_is_versioned_and_emits_a_reference_event() 
         event.conflict_policy.as_deref(),
         Some("reject_provider_owned")
     );
-    assert_eq!(application.catalog().event_sequence, 7.into());
+    assert_eq!(application.catalog().event_sequence, 10.into());
 }
 
 #[tokio::test]
@@ -477,6 +477,7 @@ async fn administrative_instrument_and_listing_upserts_share_commit_path() {
             issuer_id: None,
             share_class: None,
             primary_currency_asset_id: None,
+            settlement_asset_id: None,
             underlying_instrument_id: None,
             expiry_unix_nanos: None,
             strike: None,
@@ -511,7 +512,7 @@ async fn administrative_instrument_and_listing_upserts_share_commit_path() {
         .collect::<Vec<_>>();
     assert_eq!(events[0].record_kind.as_deref(), Some("listing"));
     assert_eq!(events[1].record_kind.as_deref(), Some("instrument"));
-    assert_eq!(application.catalog().lifecycle_events.len(), 8);
+    assert_eq!(application.catalog().lifecycle_events.len(), 11);
 }
 
 #[tokio::test]

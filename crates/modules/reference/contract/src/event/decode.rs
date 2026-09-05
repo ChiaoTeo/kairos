@@ -1,4 +1,4 @@
-use kairos_protocol::generated::kairos::reference::v_2 as fb;
+use kairos_protocol::generated::kairos::reference::{v_2 as fb, v_3 as fb3};
 use kairos_protocol::{BorrowedEventView, BusinessEventKind};
 
 use crate::{ContractError, ContractResult};
@@ -14,6 +14,15 @@ pub enum ReferenceEvent<'a> {
     ListingUpdated(fb::ListingUpdated<'a>),
     MarketUpserted(fb::MarketUpserted<'a>),
     MarketUpdated(fb::MarketUpdated<'a>),
+    VenueUpserted(fb3::VenueUpserted<'a>),
+    VenueUpdated(fb3::VenueUpdated<'a>),
+    VenueListingUpserted(fb3::ListingUpserted<'a>),
+    VenueListingUpdated(fb3::ListingUpdated<'a>),
+    VenueMarketUpserted(fb3::MarketUpserted<'a>),
+    VenueMarketUpdated(fb3::MarketUpdated<'a>),
+    ProviderCatalogMembershipUpserted(fb3::ProviderCatalogMembershipUpserted<'a>),
+    ProviderCatalogMembershipUpdated(fb3::ProviderCatalogMembershipUpdated<'a>),
+    CoverageStateChanged(fb3::CoverageStateChanged<'a>),
 }
 
 pub type ReferenceEventView<'a> = ReferenceEvent<'a>;
@@ -40,6 +49,15 @@ pub enum ReferenceEventKind {
     ListingUpdated,
     MarketUpserted,
     MarketUpdated,
+    VenueUpserted,
+    VenueUpdated,
+    VenueListingUpserted,
+    VenueListingUpdated,
+    VenueMarketUpserted,
+    VenueMarketUpdated,
+    ProviderCatalogMembershipUpserted,
+    ProviderCatalogMembershipUpdated,
+    CoverageStateChanged,
 }
 
 impl ReferenceEventKind {
@@ -55,6 +73,15 @@ impl ReferenceEventKind {
             Self::ListingUpdated => "listing_updated",
             Self::MarketUpserted => "market_upserted",
             Self::MarketUpdated => "market_updated",
+            Self::VenueUpserted => "venue_upserted",
+            Self::VenueUpdated => "venue_updated",
+            Self::VenueListingUpserted => "venue_listing_upserted",
+            Self::VenueListingUpdated => "venue_listing_updated",
+            Self::VenueMarketUpserted => "venue_market_upserted",
+            Self::VenueMarketUpdated => "venue_market_updated",
+            Self::ProviderCatalogMembershipUpserted => "provider_catalog_membership_upserted",
+            Self::ProviderCatalogMembershipUpdated => "provider_catalog_membership_updated",
+            Self::CoverageStateChanged => "coverage_state_changed",
         }
     }
 }
@@ -80,6 +107,19 @@ impl<'a> BorrowedEventView<'a> for ReferenceEvent<'a> {
             Self::ListingUpdated(_) => ReferenceEventKind::ListingUpdated,
             Self::MarketUpserted(_) => ReferenceEventKind::MarketUpserted,
             Self::MarketUpdated(_) => ReferenceEventKind::MarketUpdated,
+            Self::VenueUpserted(_) => ReferenceEventKind::VenueUpserted,
+            Self::VenueUpdated(_) => ReferenceEventKind::VenueUpdated,
+            Self::VenueListingUpserted(_) => ReferenceEventKind::VenueListingUpserted,
+            Self::VenueListingUpdated(_) => ReferenceEventKind::VenueListingUpdated,
+            Self::VenueMarketUpserted(_) => ReferenceEventKind::VenueMarketUpserted,
+            Self::VenueMarketUpdated(_) => ReferenceEventKind::VenueMarketUpdated,
+            Self::ProviderCatalogMembershipUpserted(_) => {
+                ReferenceEventKind::ProviderCatalogMembershipUpserted
+            },
+            Self::ProviderCatalogMembershipUpdated(_) => {
+                ReferenceEventKind::ProviderCatalogMembershipUpdated
+            },
+            Self::CoverageStateChanged(_) => ReferenceEventKind::CoverageStateChanged,
         }
     }
 
@@ -95,6 +135,15 @@ impl<'a> BorrowedEventView<'a> for ReferenceEvent<'a> {
             Self::ListingUpdated(value) => value.metadata(),
             Self::MarketUpserted(value) => value.metadata(),
             Self::MarketUpdated(value) => value.metadata(),
+            Self::VenueUpserted(value) => value.metadata(),
+            Self::VenueUpdated(value) => value.metadata(),
+            Self::VenueListingUpserted(value) => value.metadata(),
+            Self::VenueListingUpdated(value) => value.metadata(),
+            Self::VenueMarketUpserted(value) => value.metadata(),
+            Self::VenueMarketUpdated(value) => value.metadata(),
+            Self::ProviderCatalogMembershipUpserted(value) => value.metadata(),
+            Self::ProviderCatalogMembershipUpdated(value) => value.metadata(),
+            Self::CoverageStateChanged(value) => value.metadata(),
         }
     }
 }
@@ -164,7 +213,61 @@ pub fn decode_event(bytes: &[u8]) -> ContractResult<ReferenceEvent<'_>> {
         root_as_market_updated,
         MarketUpdated
     );
+    macro_rules! decode_v3 {
+        ($has:ident, $root:ident, $variant:ident) => {
+            if fb3::$has(bytes) {
+                return fb3::$root(bytes)
+                    .map(ReferenceEvent::$variant)
+                    .map_err(|error| ContractError::Invalid(error.to_string()));
+            }
+        };
+    }
+    decode_v3!(
+        venue_upserted_buffer_has_identifier,
+        root_as_venue_upserted,
+        VenueUpserted
+    );
+    decode_v3!(
+        venue_updated_buffer_has_identifier,
+        root_as_venue_updated,
+        VenueUpdated
+    );
+    decode_v3!(
+        listing_upserted_buffer_has_identifier,
+        root_as_listing_upserted,
+        VenueListingUpserted
+    );
+    decode_v3!(
+        listing_updated_buffer_has_identifier,
+        root_as_listing_updated,
+        VenueListingUpdated
+    );
+    decode_v3!(
+        market_upserted_buffer_has_identifier,
+        root_as_market_upserted,
+        VenueMarketUpserted
+    );
+    decode_v3!(
+        market_updated_buffer_has_identifier,
+        root_as_market_updated,
+        VenueMarketUpdated
+    );
+    decode_v3!(
+        provider_catalog_membership_upserted_buffer_has_identifier,
+        root_as_provider_catalog_membership_upserted,
+        ProviderCatalogMembershipUpserted
+    );
+    decode_v3!(
+        provider_catalog_membership_updated_buffer_has_identifier,
+        root_as_provider_catalog_membership_updated,
+        ProviderCatalogMembershipUpdated
+    );
+    decode_v3!(
+        coverage_state_changed_buffer_has_identifier,
+        root_as_coverage_state_changed,
+        CoverageStateChanged
+    );
     Err(ContractError::Invalid(
-        "unknown Reference v2 event identifier".into(),
+        "unknown Reference event identifier".into(),
     ))
 }

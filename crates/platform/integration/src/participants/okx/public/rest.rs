@@ -34,7 +34,7 @@ pub struct OkxPublicRestConnection {
 }
 
 impl InstrumentCatalogQuery for OkxPublicRestConnection {
-    async fn fetch_instruments(&mut self) -> Result<ExternalInstrumentCatalog, IntegrationError> {
+    async fn fetch_instruments(&self) -> Result<ExternalInstrumentCatalog, IntegrationError> {
         let mut instruments = Vec::new();
         for instrument_type in ["SPOT", "MARGIN", "SWAP", "FUTURES", "OPTION"] {
             instruments.extend(
@@ -46,11 +46,12 @@ impl InstrumentCatalogQuery for OkxPublicRestConnection {
         Ok(ExternalInstrumentCatalog {
             participant: participant(),
             instruments,
+            venues: Vec::new(),
         })
     }
 
     async fn fetch_instruments_page(
-        &mut self,
+        &self,
         cursor: Option<&str>,
         limit: usize,
     ) -> Result<ExternalInstrumentCatalogPage, IntegrationError> {
@@ -59,6 +60,7 @@ impl InstrumentCatalogQuery for OkxPublicRestConnection {
                 catalog: ExternalInstrumentCatalog {
                     participant: participant(),
                     instruments: Vec::new(),
+                    venues: Vec::new(),
                 },
                 next_cursor: None,
                 complete: true,
@@ -427,7 +429,7 @@ impl OkxPublicRestConnection {
     /// single OKX product family. The participant-neutral capability remains
     /// the full catalog query.
     pub async fn fetch_instruments_by_type(
-        &mut self,
+        &self,
         instrument_type: &str,
     ) -> Result<ExternalInstrumentCatalog, IntegrationError> {
         let instrument_type = instrument_type.trim().to_ascii_uppercase();
@@ -461,6 +463,7 @@ impl OkxPublicRestConnection {
                 .iter()
                 .map(|row| normalize_instrument(&instrument_type, row))
                 .collect::<Result<Vec<_>, _>>()?,
+            venues: Vec::new(),
         })
     }
 }

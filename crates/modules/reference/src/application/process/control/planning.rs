@@ -24,16 +24,10 @@ struct Candidate {
     limitations: &'static [ReferenceCatalogSourceLimitation],
 }
 
-const AUTHORITATIVE_LISTINGS: &[ReferenceCatalogRecommendationReason] =
-    &[ReferenceCatalogRecommendationReason::AuthoritativeExchangeListings];
 const NATIVE_CATALOG: &[ReferenceCatalogRecommendationReason] =
     &[ReferenceCatalogRecommendationReason::NativeExchangeCatalog];
 const SUPPORTED_PRODUCT: &[ReferenceCatalogRecommendationReason] =
     &[ReferenceCatalogRecommendationReason::SupportedProduct];
-const COMPLETE_US_EQUITIES: &[ReferenceCatalogSourceLimitation] = &[
-    ReferenceCatalogSourceLimitation::SynchronizesCompleteUnitedStatesEquities,
-    ReferenceCatalogSourceLimitation::RequiresProviderAccount,
-];
 const REQUIRES_ACCOUNT: &[ReferenceCatalogSourceLimitation] =
     &[ReferenceCatalogSourceLimitation::RequiresProviderAccount];
 const PROVIDER_SPECIFIC: &[ReferenceCatalogSourceLimitation] =
@@ -129,7 +123,7 @@ fn candidates_for_goal(
                 vec![candidate(
                     ReferenceSourceBinding::Massive(MassiveReferenceSource::Options),
                     ReferenceCatalogActualScope::SelectedUnderlyings,
-                    AUTHORITATIVE_LISTINGS,
+                    SUPPORTED_PRODUCT,
                     REQUIRES_ACCOUNT,
                 )],
                 Vec::new(),
@@ -156,9 +150,12 @@ fn exchange_candidates(exchange: &str, kind: InstrumentKind) -> Vec<Candidate> {
             InstrumentKind::Equity,
         ) => vec![candidate(
             ReferenceSourceBinding::Massive(MassiveReferenceSource::Equity),
-            ReferenceCatalogActualScope::CompleteUnitedStatesEquities,
-            AUTHORITATIVE_LISTINGS,
-            COMPLETE_US_EQUITIES,
+            ReferenceCatalogActualScope::ProviderCatalog,
+            SUPPORTED_PRODUCT,
+            &[
+                ReferenceCatalogSourceLimitation::RequiresProviderAccount,
+                ReferenceCatalogSourceLimitation::ProductIsProviderSpecific,
+            ],
         )],
         ("binance", InstrumentKind::Spot) => vec![native_candidate(
             ReferenceSourceBinding::Binance(BinanceReferenceSource::Spot),
@@ -245,7 +242,7 @@ fn setup_option(
     let already_configured = health.is_some_and(|health| health.definition.is_some());
     let connection_binding_present = health
         .and_then(|health| health.definition.as_ref())
-        .is_some_and(|definition| definition.credential_binding.is_some());
+        .is_some_and(|definition| definition.connection_id.is_some());
     let mut reasons = candidate.reasons.to_vec();
     if already_configured {
         reasons.push(ReferenceCatalogRecommendationReason::ExistingConfiguration);
@@ -356,7 +353,7 @@ mod tests {
     };
 
     #[test]
-    fn nasdaq_equities_discloses_complete_us_catalog_and_account_requirement() {
+    fn nasdaq_equities_discloses_provider_catalog_scope_and_account_requirement() {
         let plan = catalog_setup_plan(
             exchange_goal("exchange:nasdaq", InstrumentKind::Equity),
             &[],
@@ -374,12 +371,12 @@ mod tests {
         );
         assert_eq!(
             plan.options[0].actual_scope,
-            ReferenceCatalogActualScope::CompleteUnitedStatesEquities
+            ReferenceCatalogActualScope::ProviderCatalog
         );
         assert!(
-            plan.options[0].limitations.contains(
-                &ReferenceCatalogSourceLimitation::SynchronizesCompleteUnitedStatesEquities
-            )
+            plan.options[0]
+                .limitations
+                .contains(&ReferenceCatalogSourceLimitation::ProductIsProviderSpecific)
         );
         assert_eq!(
             plan.blockers,
@@ -501,7 +498,7 @@ mod tests {
             .definition(
                 crate::domain::SourceScope::global(),
                 crate::domain::SourceDesiredState::Enabled,
-                Some(crate::domain::SourceCredentialBinding::new("massive-account").unwrap()),
+                Some(crate::domain::SourceConnectionId::new("massive-account").unwrap()),
             )
             .unwrap();
         SourceHealth {

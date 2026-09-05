@@ -352,7 +352,11 @@ def _load_destinations(path: Path) -> tuple[dict[str, _DestinationRecord], str]:
 def _resolve_destination(
     workspace: Workspace, record: _DestinationRecord
 ) -> NotificationDestination:
-    if record.sender not in {"feishu", "telegram"}:
+    if record.sender == "feishu":
+        sender = "feishu"
+    elif record.sender == "telegram":
+        sender = "telegram"
+    else:
         raise NotificationConfigError(
             f"notification destination {record.destination_id} has unsupported sender: "
             f"{record.sender}"
@@ -372,7 +376,7 @@ def _resolve_destination(
             f"notification credential {record.credential_id} provider {provider!r} "
             f"does not match sender {record.sender!r}"
         )
-    if record.sender == "feishu":
+    if sender == "feishu":
         signing_secret = _credential_value(
             workspace,
             record.credential_id,
@@ -402,7 +406,7 @@ def _resolve_destination(
         }
     return NotificationDestination(
         record.destination_id,
-        record.sender,  # type: ignore[arg-type]
+        sender,
         credential_id=record.credential_id,
         settings=record.settings,
         secrets=secrets,

@@ -1,6 +1,7 @@
 use super::{
-    AlgorithmActionKind, AlgorithmDecision, AlgorithmExecutionStyle, AlgorithmInput,
-    AlgorithmLegLifecycle, AlgorithmRun, AlgorithmRunStatus, ExecutionAlgorithmSpec,
+    AlgorithmActionKind, AlgorithmDecision, AlgorithmError, AlgorithmExecutionStyle,
+    AlgorithmInput, AlgorithmInvariant, AlgorithmLegLifecycle, AlgorithmRun, AlgorithmRunStatus,
+    ExecutionAlgorithmSpec,
 };
 
 /// Authorize passive children from explicit, already validated quote input.
@@ -9,9 +10,11 @@ use super::{
 pub fn decide_passive_limit(
     run: &AlgorithmRun,
     mut input: AlgorithmInput,
-) -> Result<AlgorithmDecision, String> {
+) -> Result<AlgorithmDecision, AlgorithmError> {
     let ExecutionAlgorithmSpec::PassiveLimit(spec) = &run.spec else {
-        return Err("passive-limit decision received a different algorithm spec".into());
+        return Err(AlgorithmError::SpecMismatch {
+            expected: "passive-limit",
+        });
     };
     spec.validate()?;
     run.validate()?;
@@ -19,7 +22,7 @@ pub fn decide_passive_limit(
         .last_decision_at
         .is_some_and(|current| input.business_time < current)
     {
-        return Err("algorithm business time cannot move backwards".into());
+        return Err(AlgorithmError::BusinessTimeRegression);
     }
     if matches!(
         run.status,
@@ -77,20 +80,28 @@ pub fn decide_passive_limit(
     let mut actions = Vec::with_capacity(candidates.len());
     for candidate in candidates {
         if candidate.quantity.is_zero() {
-            return Err("passive-limit child quantity must be positive".into());
+            return Err(AlgorithmError::invariant(
+                AlgorithmInvariant::ReadyChildQuantityNotPositive,
+            ));
         }
         if !order_ids.insert(candidate.order_id.clone())
             || !leg_ids.insert(candidate.leg_id.clone())
         {
-            return Err("passive-limit decision requires unique order and leg candidates".into());
+            return Err(AlgorithmError::invariant(
+                AlgorithmInvariant::DuplicateReadyChild,
+            ));
         }
         let leg = run
             .legs
             .iter()
             .find(|leg| leg.leg_id == candidate.leg_id)
-            .ok_or_else(|| "passive-limit child references an unknown leg".to_string())?;
+            .ok_or_else(|| AlgorithmError::MissingLeg {
+                leg_id: candidate.leg_id.to_string(),
+            })?;
         if candidate.quantity > leg.target_quantity {
-            return Err("passive-limit child exceeds the leg target".into());
+            return Err(AlgorithmError::invariant(
+                AlgorithmInvariant::ChildExceedsLegTarget,
+            ));
         }
         actions.push(AlgorithmActionKind::SubmitChild {
             order_id: candidate.order_id,

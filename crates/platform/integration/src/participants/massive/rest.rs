@@ -320,17 +320,25 @@ fn now_unix_nanos() -> u64 {
 }
 
 impl InstrumentCatalogQuery for MassiveRestConnection {
-    async fn fetch_instruments(&mut self) -> Result<ExternalInstrumentCatalog, IntegrationError> {
-        normalization::normalize(
+    async fn fetch_instruments(&self) -> Result<ExternalInstrumentCatalog, IntegrationError> {
+        let rows = self
+            .service
+            .load_markets()
+            .await
+            .map_err(map_exchange_error)?;
+        let venues = if self.instrument_query.instrument_type == InstrumentType::Equity {
             self.service
-                .load_markets()
+                .load_venues()
                 .await
-                .map_err(map_exchange_error)?,
-        )
+                .map_err(map_exchange_error)?
+        } else {
+            Vec::new()
+        };
+        normalization::normalize(rows, venues)
     }
 
     async fn fetch_instruments_page(
-        &mut self,
+        &self,
         cursor: Option<&str>,
         limit: usize,
     ) -> Result<ExternalInstrumentCatalogPage, IntegrationError> {
@@ -340,7 +348,19 @@ impl InstrumentCatalogQuery for MassiveRestConnection {
             .await
             .map_err(map_exchange_error)?;
         Ok(ExternalInstrumentCatalogPage {
-            catalog: normalization::normalize(page.rows)?,
+            catalog: normalization::normalize(
+                page.rows,
+                if cursor.is_none()
+                    && self.instrument_query.instrument_type == InstrumentType::Equity
+                {
+                    self.service
+                        .load_venues()
+                        .await
+                        .map_err(map_exchange_error)?
+                } else {
+                    Vec::new()
+                },
+            )?,
             next_cursor: page.next_cursor,
             complete: page.complete,
         })
@@ -486,6 +506,10 @@ mod error_tests {
                         .contains("/v2/snapshot/locale/us/markets/stocks/tickers/AAPL")
                 );
                 let body = r#"{"ticker":{"ticker":"AAPL","lastQuote":{"p":226.1,"s":10,"P":226.2,"S":12,"t":1787270400000000000},"lastTrade":{"i":"trade-1","p":226.15,"s":3,"t":1787270400000000100},"min":{"o":226,"h":226.3,"l":225.9,"c":226.15,"v":1200,"t":1787270400000},"day":{"o":224,"h":227,"l":223,"c":226.15,"v":2000000,"t":1787241600000}}}"#;
+                let mut body: serde_json::Value = serde_json::from_str(body).unwrap();
+                body["ticker"]["lastQuote"]["x"] = serde_json::json!(19);
+                body["ticker"]["lastQuote"]["X"] = serde_json::json!(11);
+                let body = body.to_string();
                 write!(
                     stream,
                     "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
@@ -530,6 +554,9 @@ mod error_tests {
         assert_eq!(quote.symbol, symbol);
         assert_eq!(quote.bid_price.unwrap().to_string(), "226.1");
         assert_eq!(quote.ask_price.unwrap().to_string(), "226.2");
+        assert_eq!(quote.venue.bid_exchange.as_deref(), Some("19"));
+        assert_eq!(quote.venue.ask_exchange.as_deref(), Some("11"));
+        assert!(quote.venue.trade_exchange.is_none());
         assert_eq!(trade.price.to_string(), "226.15");
         assert_eq!(bar.interval, "1m");
         assert_eq!(bar.close.to_string(), "226.15");

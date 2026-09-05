@@ -1,92 +1,10 @@
 //! Reference-owned workspace configuration schema.
 
+use std::collections::BTreeMap;
+
 use serde::Deserialize;
 
 use crate::domain::{ReferenceError, ReferenceResult, SourceTickBudget};
-
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct ReferenceProviders {
-    #[serde(default = "default_binance_provider")]
-    pub binance: BinanceReferenceProvider,
-    #[serde(default = "default_public_provider")]
-    pub okx: PublicReferenceProvider,
-    #[serde(default = "default_public_provider")]
-    pub hyperliquid: PublicReferenceProvider,
-    #[serde(default)]
-    pub massive: CredentialedReferenceProvider,
-}
-
-impl Default for ReferenceProviders {
-    fn default() -> Self {
-        Self {
-            binance: default_binance_provider(),
-            okx: default_public_provider(),
-            hyperliquid: default_public_provider(),
-            massive: CredentialedReferenceProvider::default(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct BinanceReferenceProvider {
-    #[serde(default = "enabled_by_default")]
-    pub enabled: bool,
-    /// When present, also enables the credentialed Binance equity catalog.
-    pub credential_id: Option<String>,
-    #[serde(default)]
-    pub endpoints: BinanceReferenceEndpoints,
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct PublicReferenceProvider {
-    #[serde(default = "enabled_by_default")]
-    pub enabled: bool,
-    pub endpoint: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct CredentialedReferenceProvider {
-    #[serde(default)]
-    pub enabled: bool,
-    /// Integration-owned connection profile. Legacy credential/endpoint fields
-    /// remain readable during the workspace migration.
-    pub connection_id: Option<String>,
-    pub credential_id: Option<String>,
-    pub endpoint: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct BinanceReferenceEndpoints {
-    pub spot: Option<String>,
-    pub usd_m_futures: Option<String>,
-    pub coin_m_futures: Option<String>,
-    pub options: Option<String>,
-    pub equity: Option<String>,
-}
-
-const fn enabled_by_default() -> bool {
-    true
-}
-
-fn default_binance_provider() -> BinanceReferenceProvider {
-    BinanceReferenceProvider {
-        enabled: true,
-        credential_id: None,
-        endpoints: BinanceReferenceEndpoints::default(),
-    }
-}
-
-fn default_public_provider() -> PublicReferenceProvider {
-    PublicReferenceProvider {
-        enabled: true,
-        endpoint: None,
-    }
-}
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -141,8 +59,21 @@ impl ReferenceTickBudgetConfig {
 pub struct ReferenceConfig {
     #[serde(default)]
     pub runtime: ReferenceRuntimeConfig,
+    /// Read-only migration input for workspaces created before connection
+    /// profiles and the durable source registry became authoritative.
+    #[serde(default, rename = "providers")]
+    legacy_providers: BTreeMap<String, LegacyReferenceProviderConfig>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub(crate) struct LegacyReferenceProviderConfig {
+    #[serde(default = "enabled_by_default")]
+    pub(crate) enabled: bool,
+    pub(crate) endpoint: Option<String>,
+    pub(crate) credential_id: Option<String>,
+    pub(crate) product: Option<String>,
     #[serde(default)]
-    pub providers: ReferenceProviders,
+    pub(crate) products: Vec<String>,
 }
 
 impl ReferenceConfig {
@@ -164,8 +95,38 @@ impl ReferenceConfig {
             "refresh_interval_seconds",
         )
         .map_err(|error| error.to_string())?;
+        for (provider, config) in &self.legacy_providers {
+            let allowed: &[&str] = match provider.as_str() {
+                "binance" => &[
+                    "spot",
+                    "usd-m-futures",
+                    "coin-m-futures",
+                    "options",
+                    "equity",
+                ],
+                "okx" => &["spot", "margin", "swap", "futures", "options"],
+                "hyperliquid" => &["spot", "perpetual"],
+                "massive" => &["equity", "options"],
+                _ => return Err(format!("unsupported legacy Reference provider {provider}")),
+            };
+            for product in config.product.iter().chain(config.products.iter()) {
+                if !allowed.contains(&product.as_str()) {
+                    return Err(format!(
+                        "unsupported legacy Reference product {provider}/{product}"
+                    ));
+                }
+            }
+        }
         Ok(())
     }
+
+    pub(crate) fn legacy_providers(&self) -> &BTreeMap<String, LegacyReferenceProviderConfig> {
+        &self.legacy_providers
+    }
+}
+
+fn enabled_by_default() -> bool {
+    true
 }
 
 fn validate_non_zero_u32(value: Option<u32>, field: &str) -> ReferenceResult<()> {
@@ -191,17 +152,18 @@ mod tests {
     use super::ReferenceConfig;
 
     #[test]
-    fn provider_configuration_does_not_expose_source_products() {
+    fn legacy_provider_configuration_is_accepted_only_as_migration_input() {
         assert!(
             serde_json::from_str::<ReferenceConfig>(
                 r#"{"providers":{"unknown":{"enabled":true}}}"#
             )
+            .unwrap()
+            .validate()
             .is_err()
         );
-        assert!(
-            serde_json::from_str::<ReferenceConfig>(r#"{"providers":{"okx":{"product":"swap"}}}"#)
-                .is_err()
-        );
+        let okx: ReferenceConfig =
+            serde_json::from_str(r#"{"providers":{"okx":{"product":"swap"}}}"#).unwrap();
+        okx.validate().unwrap();
         assert!(
             serde_json::from_str::<ReferenceConfig>(
                 r#"{"products":{"binance":{"equity":{"enabled":true}}}}"#
@@ -209,58 +171,38 @@ mod tests {
             .is_err()
         );
 
-        let configured: ReferenceConfig = serde_json::from_str(
+        let legacy = serde_json::from_str::<ReferenceConfig>(
             r#"{"providers":{"massive":{"enabled":true,"credential_id":"massive-readonly"}}}"#,
         )
         .unwrap();
-        assert!(configured.providers.massive.enabled);
         assert_eq!(
-            configured.providers.massive.credential_id.as_deref(),
+            legacy.legacy_providers()["massive"]
+                .credential_id
+                .as_deref(),
             Some("massive-readonly")
         );
-        configured.validate().unwrap();
     }
 
     #[test]
-    fn zero_configuration_enables_public_providers_only() {
+    fn zero_configuration_only_defines_runtime_policy() {
         let config = ReferenceConfig::default();
 
-        assert!(config.providers.binance.enabled);
-        assert!(config.providers.okx.enabled);
-        assert!(config.providers.hyperliquid.enabled);
-        assert!(!config.providers.massive.enabled);
-        assert!(config.providers.binance.credential_id.is_none());
         assert_eq!(config.runtime.refresh_interval().as_secs(), 300);
         config.validate().unwrap();
     }
 
     #[test]
-    fn advanced_configuration_is_nested_below_runtime_and_provider() {
+    fn advanced_configuration_is_nested_below_runtime() {
         let config: ReferenceConfig = toml::from_str(
             r#"
             [runtime]
             refresh_interval_seconds = 60
 
-            [providers.massive]
-            enabled = true
-            credential_id = "massive-readonly"
-            endpoint = "https://massive.example"
-
-            [providers.binance.endpoints]
-            spot = "https://binance.example"
             "#,
         )
         .unwrap();
 
         assert_eq!(config.runtime.refresh_interval().as_secs(), 60);
-        assert_eq!(
-            config.providers.massive.credential_id.as_deref(),
-            Some("massive-readonly")
-        );
-        assert_eq!(
-            config.providers.binance.endpoints.spot.as_deref(),
-            Some("https://binance.example")
-        );
         config.validate().unwrap();
     }
 

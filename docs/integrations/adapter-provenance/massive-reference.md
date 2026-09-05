@@ -2,9 +2,9 @@
 
 ## Sources and license
 
-- Provider contract: Massive REST reference endpoints for stock tickers and
-  option contracts (`/v3/reference/tickers` and
-  `/v3/reference/options/contracts`).
+- Provider contract: Massive REST reference endpoints for stock tickers,
+  option contracts, and market centers (`/v3/reference/tickers`,
+  `/v3/reference/options/contracts`, and `/v3/reference/exchanges`).
 - Upstream adapter source copied or translated: none.
 - Third-party source-code license obligations introduced by this slice: none.
 
@@ -14,13 +14,23 @@
   HTTP failure classification, and normalized `ExternalInstrumentCatalog`
   facts.
 - Reference owns the durable cursor and page staging, canonical
-  exchanges/assets/instruments/listings/markets, last-known-good promotion,
-  lifecycle events, snapshots, and publication.
+  venues/assets/instruments/listings/markets, provider catalog membership,
+  last-known-good promotion, coverage, lifecycle events, and publication.
 - Massive is a DataProvider, not a canonical exchange. Stock ticker
   `primary_exchange` is mapped only to the primary Listing. Option
   `primary_exchange=BATO` maps to Cboe BZX Options Listing; `OPRA` is treated
   as a consolidated network and does not create an Exchange, Listing, or
   Market. Massive reference rows never generate `market:massive:*`.
+- The market-centers endpoint supplies provider exchange IDs, MICs, operating
+  MICs, participant IDs, and facility kinds. Integration preserves those raw
+  identifiers; Reference creates a canonical Venue only when the row supplies
+  a valid MIC, then stores the provider-ID/MIC-to-Venue mapping. It does not
+  hard-code numeric Massive exchange codes or infer a Venue from the provider
+  name.
+- A completed Massive equities scan proves completeness only for the Massive
+  Equities product catalog. It does not prove a complete US national listing
+  or execution-venue universe, even when individual ticker rows contain usable
+  primary-listing evidence.
 - Stock and option catalogs use the target `InstrumentCatalogQuery` on the concrete
   `MassiveRestConnection`, with provider-native request filters. Each page
   is persisted as its own SQLite staging row before its cursor is exposed as
@@ -52,7 +62,7 @@
   completed acceptance run. SQLite staging bounds
   pagination progress only—the final catalog promotion is still a scale gate,
   not evidence that an all-market options universe is suitable for the
-  steady-state Reference snapshot.
+  steady-state Reference catalog.
 - A 2026-08-17 read-only live sample confirmed that AAPL has
   `primary_exchange=XNAS` while trades in the same feed report multiple venue
   codes, including Cboe BZX and FINRA ADF/TRF. A SPY option contract reported
@@ -62,6 +72,10 @@
   bid, and ask exchange codes, tape, TRF identity, participant timestamp, and
   TRF timestamp in `MarketVenueEvidence`. They do not construct canonical
   `MarketId`s; Market composition owns that resolution.
+- The endpoint shape and exchange/facility fields are documented by Massive at
+  <https://massive.com/docs/rest/stocks/market-operations/exchanges>. Trade
+  exchange identifiers are documented at
+  <https://www.massive.com/docs/rest/stocks/trades-quotes/trades>.
 
 ## Connection topology audit (2026-08-17)
 

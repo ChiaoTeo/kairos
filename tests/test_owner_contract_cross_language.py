@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from importlib import import_module
+from pathlib import Path
 import subprocess
 
 import pytest
@@ -8,22 +10,18 @@ import pytest
 from kairospy.primitives.decimal import Price, PriceLike, Quantity, QuantityLike
 
 
-def _rust_event(owner: str, example: str) -> object:
+def _rust_event(
+    rust_contract_example: Callable[[str], Path], owner: str, example: str
+) -> object:
     native = import_module(f"kairospy._native_{owner}_contract")
-    return native.decode_event(_rust_event_bytes(owner, example))
+    return native.decode_event(_rust_event_bytes(rust_contract_example, example))
 
 
-def _rust_event_bytes(owner: str, example: str) -> bytes:
+def _rust_event_bytes(
+    rust_contract_example: Callable[[str], Path], example: str
+) -> bytes:
     completed = subprocess.run(
-        [
-            "cargo",
-            "run",
-            "--quiet",
-            "-p",
-            f"kairos-{owner}-contract",
-            "--example",
-            example,
-        ],
+        [rust_contract_example(example)],
         check=True,
         capture_output=True,
         text=True,
@@ -41,19 +39,25 @@ def _rust_event_bytes(owner: str, example: str) -> bytes:
         ("risk", "emit_circuit_event_fixture"),
     ),
 )
+@pytest.mark.rust_interop
 def test_rust_owner_fixture_corruption_has_stable_python_error_code(
-    owner: str, example: str
+    owner: str,
+    example: str,
+    rust_contract_example: Callable[[str], Path],
 ) -> None:
     native = import_module(f"kairospy._native_{owner}_contract")
-    payload = _rust_event_bytes(owner, example)
+    payload = _rust_event_bytes(rust_contract_example, example)
 
     with pytest.raises(getattr(native, f"{owner.title()}InvalidEventError")) as error:
         native.decode_event(payload[:8])
     assert error.value.code == "invalid_wire_data"
 
 
-def test_rust_account_event_fixture_has_the_same_python_typed_fields() -> None:
-    event = _rust_event("account", "emit_status_event_fixture")
+@pytest.mark.rust_interop
+def test_rust_account_event_fixture_has_the_same_python_typed_fields(
+    rust_contract_example: Callable[[str], Path],
+) -> None:
+    event = _rust_event(rust_contract_example, "account", "emit_status_event_fixture")
 
     assert event.account_id == "main"
     assert event.metadata.sequence == 1
@@ -62,9 +66,12 @@ def test_rust_account_event_fixture_has_the_same_python_typed_fields() -> None:
     assert event.provenance.provider_sequence == 10
 
 
-def test_market_native_batch_projects_stable_owned_events() -> None:
+@pytest.mark.rust_interop
+def test_market_native_batch_projects_stable_owned_events(
+    rust_contract_example: Callable[[str], Path],
+) -> None:
     native = import_module("kairospy._native_market_contract")
-    payload = _rust_event_bytes("market", "emit_quote_event_fixture")
+    payload = _rust_event_bytes(rust_contract_example, "emit_quote_event_fixture")
 
     events = native.decode_events([payload, payload])
     del payload
@@ -75,8 +82,11 @@ def test_market_native_batch_projects_stable_owned_events() -> None:
     assert events[1].data.ask_price.value == Price("123.55").value
 
 
-def test_rust_capital_event_fixture_preserves_decimal_text_and_absence() -> None:
-    event = _rust_event("capital", "emit_policy_event_fixture")
+@pytest.mark.rust_interop
+def test_rust_capital_event_fixture_preserves_decimal_text_and_absence(
+    rust_contract_example: Callable[[str], Path],
+) -> None:
+    event = _rust_event(rust_contract_example, "capital", "emit_policy_event_fixture")
 
     assert event.kind == "policy_changed"
     assert event.metadata.sequence == 11
@@ -88,8 +98,13 @@ def test_rust_capital_event_fixture_preserves_decimal_text_and_absence() -> None
     assert event.data.default_target.value == Quantity("20.5").value
 
 
-def test_rust_execution_event_fixture_preserves_metadata_and_nested_values() -> None:
-    event = _rust_event("execution", "emit_lifecycle_event_fixture")
+@pytest.mark.rust_interop
+def test_rust_execution_event_fixture_preserves_metadata_and_nested_values(
+    rust_contract_example: Callable[[str], Path],
+) -> None:
+    event = _rust_event(
+        rust_contract_example, "execution", "emit_lifecycle_event_fixture"
+    )
 
     assert event.kind == "intent_lifecycle_changed"
     assert event.metadata.sequence == 2
@@ -99,8 +114,11 @@ def test_rust_execution_event_fixture_preserves_metadata_and_nested_values() -> 
     assert event.data.intent.strategy_decision_id == "strategy-a:decision:1"
 
 
-def test_rust_risk_event_fixture_preserves_typed_optional_fields() -> None:
-    event = _rust_event("risk", "emit_circuit_event_fixture")
+@pytest.mark.rust_interop
+def test_rust_risk_event_fixture_preserves_typed_optional_fields(
+    rust_contract_example: Callable[[str], Path],
+) -> None:
+    event = _rust_event(rust_contract_example, "risk", "emit_circuit_event_fixture")
 
     assert event.kind == "circuit_opened"
     assert event.metadata.sequence == 13
@@ -111,8 +129,11 @@ def test_rust_risk_event_fixture_preserves_typed_optional_fields() -> None:
     assert event.data.reset_at_unix_nanos is None
 
 
-def test_rust_market_event_fixture_preserves_decimal_and_scope_values() -> None:
-    event = _rust_event("market", "emit_quote_event_fixture")
+@pytest.mark.rust_interop
+def test_rust_market_event_fixture_preserves_decimal_and_scope_values(
+    rust_contract_example: Callable[[str], Path],
+) -> None:
+    event = _rust_event(rust_contract_example, "market", "emit_quote_event_fixture")
 
     assert event.kind == "quote_updated"
     assert event.metadata.sequence == 17
@@ -122,6 +143,10 @@ def test_rust_market_event_fixture_preserves_decimal_and_scope_values() -> None:
     assert event.data.bid_price.mantissa == 12345
     assert event.data.bid_price.scale == 2
     assert event.data.ask_price.mantissa == 12355
+    assert event.data.bid_venue_id == "venue:bid"
+    assert event.data.ask_venue_id == "venue:ask"
+    assert event.data.bid_venue_code == "19"
+    assert event.data.ask_venue_code == "11"
     assert event.data.bid_price.semantic_type == "price"
     assert isinstance(event.data.bid_price, PriceLike)
     assert Price(event.data.bid_price) == Price("123.45")

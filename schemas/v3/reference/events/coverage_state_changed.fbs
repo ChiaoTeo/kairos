@@ -1,0 +1,6 @@
+include "../../../v2/common/metadata.fbs";
+include "../types/coverage.fbs";
+namespace kairos.reference.v3;
+table CoverageStateChanged { metadata:kairos.common.v2.EventMetadata (required); catalog_revision:ulong; coverage:ReferenceCoverage (required); previous_state:CoverageState = NOT_CONFIGURED; }
+root_type CoverageStateChanged;
+file_identifier "CSC3";

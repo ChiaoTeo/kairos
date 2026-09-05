@@ -972,7 +972,7 @@ struct DownloadCommand {
     provider: HistoricalProvider,
     #[arg(long)]
     api_key: Option<String>,
-    #[arg(long, default_value = "massive-readonly")]
+    #[arg(long)]
     credential_id: Option<String>,
     #[arg(long)]
     endpoint: Option<String>,
@@ -1096,6 +1096,31 @@ mod tests {
     use kairos_market::{CliMarketBarResult, CliMarketQuoteResult};
 
     use super::*;
+
+    #[test]
+    fn historical_download_leaves_credential_selection_to_the_connection() {
+        let cli = Cli::try_parse_from([
+            "kairos-market-cli",
+            "standalone",
+            "download",
+            "--provider",
+            "massive",
+            "--symbol",
+            "AAPL",
+            "--start",
+            "1",
+            "--end",
+            "2",
+            "--file",
+            "history.jsonl",
+        ])
+        .unwrap();
+        let Command::Standalone(StandaloneCommand::Download(command)) = cli.command else {
+            panic!("expected standalone download command");
+        };
+        assert!(command.credential_id.is_none());
+        assert!(command.endpoint.is_none());
+    }
 
     #[test]
     fn standalone_once_accepts_an_explicit_observation_kind() {
@@ -1314,6 +1339,9 @@ mod tests {
     #[test]
     fn direct_quote_table_uses_market_labels_instead_of_internal_keys() {
         let snapshot = CliDirectObservationResult::Quote(CliMarketQuoteResult {
+            bid_venue_code: Some("19".into()),
+            ask_venue_code: Some("11".into()),
+            tape: Some(3),
             symbol: "AAPL".into(),
             data_type: "quote",
             provider: "massive".into(),

@@ -58,6 +58,7 @@ class MarketSession:
 
     purpose: str = "search"
     query: str | None = None
+    intent_choices: tuple[tuple[str, str, str], ...] = ()
     catalog_setup_goal: CatalogSetupGoal | None = None
     catalog_setup_plan: CatalogSetupPlanView | None = None
     catalog_setup_reference_recovery: str | None = None
@@ -83,6 +84,7 @@ class MarketSession:
     def reset(self) -> None:
         self.purpose = "search"
         self.query = None
+        self.intent_choices = ()
         self.catalog_setup_goal = None
         self.catalog_setup_plan = None
         self.catalog_setup_reference_recovery = None

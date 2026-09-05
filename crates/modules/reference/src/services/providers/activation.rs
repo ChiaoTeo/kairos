@@ -1,6 +1,6 @@
 use kairos_conflux::{
-    ConnectionCollections, ConnectionKey, HyperliquidRestConfig, MassiveInstrumentQuery,
-    MassiveRestConfig, OkxRestConfig,
+    BinanceRestConfig, ConnectionCollections, ConnectionKey, HyperliquidRestConfig,
+    MassiveInstrumentQuery, MassiveRestConfig, OkxRestConfig,
 };
 
 use super::{
@@ -36,14 +36,26 @@ pub(crate) async fn activate_runtime_source_definition(
         return Ok(None);
     }
     let key = runtime_source_connection_key(binding, definition)?;
+    let environment = credentials.environment(
+        definition.connection_id.as_deref(),
+        binding.provider(),
+        binding.product(),
+    )?;
     match binding {
         ReferenceSourceBinding::Massive(MassiveReferenceSource::Options)
             if scoped_massive_options =>
         {
-            let Some(api_key) = credentials.massive(definition.credential_binding.as_deref())?
+            let Some(api_key) =
+                credentials.massive(definition.connection_id.as_deref(), "options")?
             else {
                 return Ok(None);
             };
+            let endpoint = credentials.endpoint(
+                definition.connection_id.as_deref(),
+                "massive",
+                "options",
+                default_endpoint("massive"),
+            )?;
             let Some(sync_store) = sync_store else {
                 return Err(ReferenceError::Persistence(
                     "dynamic Massive options source activation requires provider sync store".into(),
@@ -55,8 +67,8 @@ pub(crate) async fn activate_runtime_source_definition(
                 .create(
                     key.clone(),
                     MassiveRestConfig {
-                        environment: "public".into(),
-                        endpoint: default_endpoint("massive").into(),
+                        environment: environment.clone(),
+                        endpoint: endpoint.clone(),
                         api_key: secrecy::SecretString::new(api_key.clone().into()),
                         instrument_query: MassiveInstrumentQuery::options(Some(underlying.clone())),
                     },
@@ -65,7 +77,8 @@ pub(crate) async fn activate_runtime_source_definition(
             Ok(Some(ConfiguredProviderSource::MassiveOptions(
                 MassiveOptionsCoverageSource::from_keys(
                     api_key,
-                    default_endpoint("massive"),
+                    endpoint,
+                    environment,
                     sync_store,
                     vec![(underlying, key)],
                 )
@@ -73,11 +86,20 @@ pub(crate) async fn activate_runtime_source_definition(
             )))
         },
         ReferenceSourceBinding::Binance(BinanceReferenceSource::Spot) => {
+            let endpoint = credentials.endpoint(
+                definition.connection_id.as_deref(),
+                "binance",
+                "spot",
+                default_endpoint("binance-spot"),
+            )?;
             connections
                 .binance_spot_rest
                 .create(
                     key.clone(),
-                    binance_config(default_endpoint("binance-spot"), None),
+                    BinanceRestConfig {
+                        environment,
+                        ..binance_config(&endpoint, None)
+                    },
                 )
                 .map_err(provider_error)?;
             Ok(Some(ConfiguredProviderSource::BinanceSpot(
@@ -85,11 +107,20 @@ pub(crate) async fn activate_runtime_source_definition(
             )))
         },
         ReferenceSourceBinding::Binance(BinanceReferenceSource::UsdMFutures) => {
+            let endpoint = credentials.endpoint(
+                definition.connection_id.as_deref(),
+                "binance",
+                "usd-m-futures",
+                default_endpoint("binance-usdm-futures"),
+            )?;
             connections
                 .binance_usdm_rest
                 .create(
                     key.clone(),
-                    binance_config(default_endpoint("binance-usdm-futures"), None),
+                    BinanceRestConfig {
+                        environment,
+                        ..binance_config(&endpoint, None)
+                    },
                 )
                 .map_err(provider_error)?;
             Ok(Some(ConfiguredProviderSource::BinanceDerivatives(
@@ -97,11 +128,20 @@ pub(crate) async fn activate_runtime_source_definition(
             )))
         },
         ReferenceSourceBinding::Binance(BinanceReferenceSource::CoinMFutures) => {
+            let endpoint = credentials.endpoint(
+                definition.connection_id.as_deref(),
+                "binance",
+                "coin-m-futures",
+                default_endpoint("binance-coinm-futures"),
+            )?;
             connections
                 .binance_coinm_rest
                 .create(
                     key.clone(),
-                    binance_config(default_endpoint("binance-coinm-futures"), None),
+                    BinanceRestConfig {
+                        environment,
+                        ..binance_config(&endpoint, None)
+                    },
                 )
                 .map_err(provider_error)?;
             Ok(Some(ConfiguredProviderSource::BinanceDerivatives(
@@ -109,11 +149,20 @@ pub(crate) async fn activate_runtime_source_definition(
             )))
         },
         ReferenceSourceBinding::Binance(BinanceReferenceSource::Options) => {
+            let endpoint = credentials.endpoint(
+                definition.connection_id.as_deref(),
+                "binance",
+                "options",
+                default_endpoint("binance-options"),
+            )?;
             connections
                 .binance_options_rest
                 .create(
                     key.clone(),
-                    binance_config(default_endpoint("binance-options"), None),
+                    BinanceRestConfig {
+                        environment,
+                        ..binance_config(&endpoint, None)
+                    },
                 )
                 .map_err(provider_error)?;
             Ok(Some(ConfiguredProviderSource::BinanceOptions(
@@ -121,15 +170,25 @@ pub(crate) async fn activate_runtime_source_definition(
             )))
         },
         ReferenceSourceBinding::Binance(BinanceReferenceSource::Equity) => {
-            let Some(credential) = credentials.binance(definition.credential_binding.as_deref())?
+            let Some(credential) =
+                credentials.binance(definition.connection_id.as_deref(), "equity")?
             else {
                 return Ok(None);
             };
+            let endpoint = credentials.endpoint(
+                definition.connection_id.as_deref(),
+                "binance",
+                "equity",
+                default_endpoint("binance-equity"),
+            )?;
             connections
                 .binance_stocks_rest
                 .create(
                     key.clone(),
-                    binance_config(default_endpoint("binance-equity"), Some(credential)),
+                    BinanceRestConfig {
+                        environment,
+                        ..binance_config(&endpoint, Some(credential))
+                    },
                 )
                 .map_err(provider_error)?;
             Ok(Some(ConfiguredProviderSource::BinanceEquity(
@@ -137,10 +196,17 @@ pub(crate) async fn activate_runtime_source_definition(
             )))
         },
         ReferenceSourceBinding::Massive(MassiveReferenceSource::Equity) => {
-            let Some(api_key) = credentials.massive(definition.credential_binding.as_deref())?
+            let Some(api_key) =
+                credentials.massive(definition.connection_id.as_deref(), "equity")?
             else {
                 return Ok(None);
             };
+            let endpoint = credentials.endpoint(
+                definition.connection_id.as_deref(),
+                "massive",
+                "equity",
+                default_endpoint("massive"),
+            )?;
             let Some(sync_store) = sync_store else {
                 return Err(ReferenceError::Persistence(
                     "dynamic Massive equity source activation requires provider sync store".into(),
@@ -151,8 +217,8 @@ pub(crate) async fn activate_runtime_source_definition(
                 .create(
                     key.clone(),
                     MassiveRestConfig {
-                        environment: "public".into(),
-                        endpoint: default_endpoint("massive").into(),
+                        environment,
+                        endpoint,
                         api_key: secrecy::SecretString::new(api_key.into()),
                         instrument_query: MassiveInstrumentQuery::equities(),
                     },
@@ -163,13 +229,19 @@ pub(crate) async fn activate_runtime_source_definition(
             )))
         },
         ReferenceSourceBinding::Okx(product) => {
+            let endpoint = credentials.endpoint(
+                definition.connection_id.as_deref(),
+                "okx",
+                product.profile_product(),
+                default_endpoint(binding.source_id()),
+            )?;
             connections
                 .okx_public_rest
                 .create(
                     key.clone(),
                     OkxRestConfig {
-                        environment: "public".into(),
-                        endpoint: default_endpoint(binding.source_id()).into(),
+                        environment,
+                        endpoint,
                     },
                 )
                 .map_err(provider_error)?;
@@ -180,13 +252,19 @@ pub(crate) async fn activate_runtime_source_definition(
             ))))
         },
         ReferenceSourceBinding::Hyperliquid(HyperliquidProduct::Perpetual) => {
+            let endpoint = credentials.endpoint(
+                definition.connection_id.as_deref(),
+                "hyperliquid",
+                "perpetual",
+                default_endpoint("hyperliquid"),
+            )?;
             connections
                 .hyperliquid_info_rest
                 .create(
                     key.clone(),
                     HyperliquidRestConfig {
-                        environment: "public".into(),
-                        endpoint: default_endpoint("hyperliquid").into(),
+                        environment,
+                        endpoint,
                     },
                 )
                 .map_err(provider_error)?;
@@ -195,13 +273,19 @@ pub(crate) async fn activate_runtime_source_definition(
             )))
         },
         ReferenceSourceBinding::Hyperliquid(HyperliquidProduct::Spot) => {
+            let endpoint = credentials.endpoint(
+                definition.connection_id.as_deref(),
+                "hyperliquid",
+                "spot",
+                default_endpoint("hyperliquid"),
+            )?;
             connections
                 .hyperliquid_info_rest
                 .create(
                     key.clone(),
                     HyperliquidRestConfig {
-                        environment: "public".into(),
-                        endpoint: default_endpoint("hyperliquid").into(),
+                        environment,
+                        endpoint,
                     },
                 )
                 .map_err(provider_error)?;

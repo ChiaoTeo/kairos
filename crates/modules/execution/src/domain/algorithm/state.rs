@@ -6,15 +6,17 @@ use kairos_primitives::reference::{Currency, InstrumentId, MarketId};
 use kairos_primitives::time::{DurationNanos, UnixNanos};
 use serde::{Deserialize, Serialize};
 
+use super::{AlgorithmError, AlgorithmInvariant};
+
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct AlgorithmRunId(String);
 
 impl AlgorithmRunId {
-    pub fn new(value: impl Into<String>) -> Result<Self, String> {
+    pub fn new(value: impl Into<String>) -> Result<Self, AlgorithmError> {
         let value = value.into();
         if value.trim().is_empty() {
-            return Err("algorithm run id is required".into());
+            return Err(AlgorithmError::invariant(AlgorithmInvariant::RunIdRequired));
         }
         Ok(Self(value))
     }
@@ -83,15 +85,19 @@ pub struct MakerTakerHedgeSpec {
 }
 
 impl MakerTakerHedgeSpec {
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), AlgorithmError> {
         if self.leader_leg_id == self.hedge_leg_id {
-            return Err("maker-taker leader and hedge legs must differ".into());
+            return Err(AlgorithmError::invariant(
+                AlgorithmInvariant::LeaderAndHedgeMustDiffer,
+            ));
         }
         if self
             .max_unhedged_duration
             .is_some_and(|duration| duration.get() == 0)
         {
-            return Err("maker-taker maximum unhedged duration must be positive".into());
+            return Err(AlgorithmError::invariant(
+                AlgorithmInvariant::MaximumUnhedgedDurationNotPositive,
+            ));
         }
         let mut routes = std::collections::BTreeSet::new();
         if self
@@ -99,7 +105,9 @@ impl MakerTakerHedgeSpec {
             .iter()
             .any(|route_id| !routes.insert(route_id))
         {
-            return Err("maker-taker fallback routes must be unique".into());
+            return Err(AlgorithmError::invariant(
+                AlgorithmInvariant::DuplicateFallbackRoute,
+            ));
         }
         Ok(())
     }
@@ -107,7 +115,7 @@ impl MakerTakerHedgeSpec {
     pub fn exposure_deadline(
         &self,
         exposure: &NormalizedExposureLedger,
-    ) -> Result<Option<UnixNanos>, String> {
+    ) -> Result<Option<UnixNanos>, AlgorithmError> {
         self.max_unhedged_duration
             .zip(exposure.unhedged_since)
             .map(|(duration, since)| {
@@ -115,7 +123,9 @@ impl MakerTakerHedgeSpec {
                     .get()
                     .checked_add(duration.get())
                     .map(UnixNanos::new)
-                    .ok_or_else(|| "maker-taker exposure deadline overflow".to_string())
+                    .ok_or(AlgorithmError::Overflow {
+                        operation: "maker-taker exposure deadline",
+                    })
             })
             .transpose()
     }
@@ -124,7 +134,7 @@ impl MakerTakerHedgeSpec {
         &self,
         exposure: &NormalizedExposureLedger,
         business_time: UnixNanos,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, AlgorithmError> {
         Ok(
             exposure.unhedged_filled_quantity > self.max_unhedged_quantity
                 || (!exposure.unhedged_filled_quantity.is_zero()
@@ -134,42 +144,70 @@ impl MakerTakerHedgeSpec {
         )
     }
 
-    pub fn required_hedge_quantity(&self, leader_filled: Quantity) -> Result<Quantity, String> {
+    pub fn required_hedge_quantity(
+        &self,
+        leader_filled: Quantity,
+    ) -> Result<Quantity, AlgorithmError> {
         let required = self
             .hedge_ratio
             .apply_to_nonnegative(leader_filled.mantissa())
-            .map_err(|error| error.to_string())?;
+            .map_err(|source| AlgorithmError::Arithmetic {
+                operation: "maker-taker hedge ratio",
+                source,
+            })?;
         let required = self
             .contract_multiplier
             .apply_to_nonnegative(required)
-            .map_err(|error| error.to_string())?;
-        Quantity::new(required, leader_filled.scale()).map_err(|error| error.to_string())
+            .map_err(|source| AlgorithmError::Arithmetic {
+                operation: "maker-taker contract multiplier",
+                source,
+            })?;
+        Quantity::new(required, leader_filled.scale()).map_err(|source| {
+            AlgorithmError::Arithmetic {
+                operation: "maker-taker hedge quantity",
+                source,
+            }
+        })
     }
 
     pub fn leader_quantity_for_hedge_exposure(
         &self,
         hedge_exposure: Quantity,
-    ) -> Result<Quantity, String> {
+    ) -> Result<Quantity, AlgorithmError> {
         let numerator = u128::from(self.hedge_ratio.numerator())
             .checked_mul(u128::from(self.contract_multiplier.numerator()))
-            .ok_or_else(|| "maker-taker ratio overflow".to_string())?;
+            .ok_or(AlgorithmError::Overflow {
+                operation: "maker-taker ratio numerator",
+            })?;
         let denominator = u128::from(self.hedge_ratio.denominator())
             .checked_mul(u128::from(self.contract_multiplier.denominator()))
-            .ok_or_else(|| "maker-taker ratio overflow".to_string())?;
+            .ok_or(AlgorithmError::Overflow {
+                operation: "maker-taker ratio denominator",
+            })?;
         let exposure = u128::try_from(hedge_exposure.mantissa())
-            .map_err(|_| "hedge exposure cannot be negative".to_string())?;
+            .map_err(|_| AlgorithmError::invariant(AlgorithmInvariant::ExposureNotCovered))?;
         let scaled = exposure
             .checked_mul(denominator)
-            .ok_or_else(|| "maker-taker exposure overflow".to_string())?;
-        let leader = scaled
-            .checked_add(numerator.saturating_sub(1))
-            .ok_or_else(|| "maker-taker exposure overflow".to_string())?
-            / numerator;
+            .ok_or(AlgorithmError::Overflow {
+                operation: "maker-taker exposure scaling",
+            })?;
+        let leader =
+            scaled
+                .checked_add(numerator.saturating_sub(1))
+                .ok_or(AlgorithmError::Overflow {
+                    operation: "maker-taker exposure rounding",
+                })?
+                / numerator;
         Quantity::new(
-            i64::try_from(leader).map_err(|_| "maker-taker exposure overflow".to_string())?,
+            i64::try_from(leader).map_err(|_| AlgorithmError::Overflow {
+                operation: "maker-taker leader quantity",
+            })?,
             hedge_exposure.scale(),
         )
-        .map_err(|error| error.to_string())
+        .map_err(|source| AlgorithmError::Arithmetic {
+            operation: "maker-taker leader quantity construction",
+            source,
+        })
     }
 }
 
@@ -188,35 +226,41 @@ pub struct PassiveLimitSpec {
 }
 
 impl PassiveLimitSpec {
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), AlgorithmError> {
         if self.reprice_interval.get() == 0 || self.max_quote_age.get() == 0 {
-            return Err(
-                "passive-limit reprice interval and maximum quote age must be positive".into(),
-            );
+            return Err(AlgorithmError::invariant(
+                AlgorithmInvariant::PassiveLimitIntervalNotPositive,
+            ));
         }
         Ok(())
     }
 }
 
 impl TwapSpec {
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), AlgorithmError> {
         if self.slice_interval.get() == 0 || self.slice_count < 2 {
-            return Err("TWAP requires at least two slices and a positive interval".into());
+            return Err(AlgorithmError::invariant(
+                AlgorithmInvariant::InvalidTwapSchedule,
+            ));
         }
         self.due_at(self.slice_count.saturating_sub(1))?;
         Ok(())
     }
 
-    pub fn due_at(&self, slice_index: u32) -> Result<UnixNanos, String> {
+    pub fn due_at(&self, slice_index: u32) -> Result<UnixNanos, AlgorithmError> {
         if slice_index >= self.slice_count {
-            return Err("TWAP slice index exceeds the configured schedule".into());
+            return Err(AlgorithmError::invariant(
+                AlgorithmInvariant::TwapSliceOutsideSchedule,
+            ));
         }
         self.slice_interval
             .get()
             .checked_mul(u64::from(slice_index))
             .and_then(|offset| self.start_at.get().checked_add(offset))
             .map(UnixNanos::new)
-            .ok_or_else(|| "TWAP schedule overflows business time".to_string())
+            .ok_or(AlgorithmError::Overflow {
+                operation: "TWAP schedule business time",
+            })
     }
 }
 
@@ -289,9 +333,11 @@ pub struct AlgorithmLegState {
 }
 
 impl AlgorithmLegState {
-    pub fn immediate(leg_id: LegId, target_quantity: Quantity) -> Result<Self, String> {
+    pub fn immediate(leg_id: LegId, target_quantity: Quantity) -> Result<Self, AlgorithmError> {
         if target_quantity.is_zero() {
-            return Err("algorithm leg target quantity must be positive".into());
+            return Err(AlgorithmError::invariant(
+                AlgorithmInvariant::LegTargetNotPositive,
+            ));
         }
         Ok(Self {
             leg_id,
@@ -304,22 +350,27 @@ impl AlgorithmLegState {
         })
     }
 
-    pub fn remaining_uncommitted(&self) -> Result<Quantity, String> {
+    pub fn remaining_uncommitted(&self) -> Result<Quantity, AlgorithmError> {
         self.target_quantity
             .checked_sub(self.filled_quantity)
             .and_then(|remaining| remaining.checked_sub(self.committed_quantity))
-            .map_err(|error| error.to_string())
+            .map_err(|source| AlgorithmError::Arithmetic {
+                operation: "algorithm leg remaining quantity",
+                source,
+            })
     }
 
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), AlgorithmError> {
         let accounted = self
             .filled_quantity
             .checked_add(self.committed_quantity)
-            .map_err(|error| error.to_string())?;
+            .map_err(|source| AlgorithmError::Arithmetic {
+                operation: "algorithm leg accounted quantity",
+                source,
+            })?;
         if accounted > self.target_quantity {
-            return Err(format!(
-                "algorithm leg {} accounts for more than its target",
-                self.leg_id
+            return Err(AlgorithmError::invariant(
+                AlgorithmInvariant::LegExceedsTarget,
             ));
         }
         Ok(())
@@ -458,13 +509,13 @@ impl AlgorithmRun {
     pub fn immediate(
         intent_id: IntentId,
         legs: impl IntoIterator<Item = (LegId, Quantity)>,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AlgorithmError> {
         let legs = legs
             .into_iter()
             .map(|(leg_id, target)| AlgorithmLegState::immediate(leg_id, target))
             .collect::<Result<Vec<_>, _>>()?;
         if legs.is_empty() {
-            return Err("algorithm run requires at least one leg".into());
+            return Err(AlgorithmError::invariant(AlgorithmInvariant::EmptyRun));
         }
         let run = Self {
             algorithm_run_id: AlgorithmRunId::for_intent(&intent_id),
@@ -505,10 +556,12 @@ impl AlgorithmRun {
         intent_id: IntentId,
         spec: TwapSpec,
         target_quantity: Quantity,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AlgorithmError> {
         spec.validate()?;
         if target_quantity.is_zero() {
-            return Err("TWAP target quantity must be positive".into());
+            return Err(AlgorithmError::invariant(
+                AlgorithmInvariant::TwapTargetNotPositive,
+            ));
         }
         let run = Self {
             algorithm_run_id: AlgorithmRunId::for_intent(&intent_id),
@@ -540,13 +593,15 @@ impl AlgorithmRun {
         intent_id: IntentId,
         spec: PassiveLimitSpec,
         legs: impl IntoIterator<Item = (LegId, Quantity)>,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AlgorithmError> {
         spec.validate()?;
         let legs = legs
             .into_iter()
             .map(|(leg_id, target_quantity)| {
                 if target_quantity.is_zero() {
-                    return Err("passive-limit leg target quantity must be positive".to_string());
+                    return Err(AlgorithmError::invariant(
+                        AlgorithmInvariant::LegTargetNotPositive,
+                    ));
                 }
                 Ok(AlgorithmLegState {
                     leg_id,
@@ -560,7 +615,9 @@ impl AlgorithmRun {
             })
             .collect::<Result<Vec<_>, _>>()?;
         if legs.is_empty() {
-            return Err("passive-limit run requires at least one leg".into());
+            return Err(AlgorithmError::invariant(
+                AlgorithmInvariant::EmptyPassiveLimitRun,
+            ));
         }
         let run = Self {
             algorithm_run_id: AlgorithmRunId::for_intent(&intent_id),
@@ -585,7 +642,7 @@ impl AlgorithmRun {
         spec: MakerTakerHedgeSpec,
         leader_target_quantity: Quantity,
         hedge_target_quantity: Quantity,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AlgorithmError> {
         spec.validate()?;
         let leader = AlgorithmLegState {
             leg_id: spec.leader_leg_id.clone(),
@@ -606,7 +663,9 @@ impl AlgorithmRun {
             benchmark: None,
         };
         if leader_target_quantity.is_zero() || hedge_target_quantity.is_zero() {
-            return Err("maker-taker leg targets must be positive".into());
+            return Err(AlgorithmError::invariant(
+                AlgorithmInvariant::MakerTakerTargetNotPositive,
+            ));
         }
         let run = Self {
             algorithm_run_id: AlgorithmRunId::for_intent(&intent_id),
@@ -637,14 +696,18 @@ impl AlgorithmRun {
         Ok(run)
     }
 
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), AlgorithmError> {
         if self.algorithm_version == 0 {
-            return Err("algorithm version must be positive".into());
+            return Err(AlgorithmError::invariant(
+                AlgorithmInvariant::AlgorithmVersionNotPositive,
+            ));
         }
         let mut leg_ids = std::collections::BTreeSet::new();
         for leg in &self.legs {
             if !leg_ids.insert(leg.leg_id.clone()) {
-                return Err(format!("duplicate algorithm leg: {}", leg.leg_id));
+                return Err(AlgorithmError::DuplicateLeg {
+                    leg_id: leg.leg_id.to_string(),
+                });
             }
             leg.validate()?;
         }
@@ -654,19 +717,27 @@ impl AlgorithmRun {
                 .legs
                 .iter()
                 .find(|leg| leg.leg_id == spec.leader_leg_id)
-                .ok_or_else(|| "maker-taker leader leg is missing".to_string())?;
+                .ok_or_else(|| AlgorithmError::MissingLeg {
+                    leg_id: spec.leader_leg_id.to_string(),
+                })?;
             let hedge = self
                 .legs
                 .iter()
                 .find(|leg| leg.leg_id == spec.hedge_leg_id)
-                .ok_or_else(|| "maker-taker hedge leg is missing".to_string())?;
+                .ok_or_else(|| AlgorithmError::MissingLeg {
+                    leg_id: spec.hedge_leg_id.to_string(),
+                })?;
             if leader.role != AlgorithmLegRole::LeaderMaker
                 || hedge.role != AlgorithmLegRole::HedgeTaker
             {
-                return Err("maker-taker leg roles do not match the algorithm spec".into());
+                return Err(AlgorithmError::invariant(
+                    AlgorithmInvariant::MakerTakerLegRoleMismatch,
+                ));
             }
             if self.exposure.is_none() {
-                return Err("maker-taker run requires an exposure ledger".into());
+                return Err(AlgorithmError::invariant(
+                    AlgorithmInvariant::MissingExposureLedger,
+                ));
             }
         }
         if let ExecutionAlgorithmSpec::Twap(spec) = &self.spec {
@@ -676,7 +747,9 @@ impl AlgorithmRun {
                 || self.legs[0].role != AlgorithmLegRole::Twap
                 || self.exposure.is_some()
             {
-                return Err("TWAP run does not match its single scheduled leg".into());
+                return Err(AlgorithmError::invariant(
+                    AlgorithmInvariant::TwapRunShapeMismatch,
+                ));
             }
             let submit_count = self
                 .actions
@@ -692,7 +765,9 @@ impl AlgorithmRun {
                 })
                 .count();
             if submit_count > spec.slice_count as usize {
-                return Err("TWAP run contains more slices than its schedule".into());
+                return Err(AlgorithmError::invariant(
+                    AlgorithmInvariant::TooManyTwapSlices,
+                ));
             }
         }
         if let ExecutionAlgorithmSpec::PassiveLimit(spec) = &self.spec {
@@ -702,16 +777,22 @@ impl AlgorithmRun {
                 .iter()
                 .any(|leg| leg.role != AlgorithmLegRole::PassiveLimit)
             {
-                return Err("passive-limit run contains a non-passive leg".into());
+                return Err(AlgorithmError::invariant(
+                    AlgorithmInvariant::PassiveLimitRoleMismatch,
+                ));
             }
         }
         let mut action_ids = std::collections::BTreeSet::new();
         for action in &self.actions {
             if !action_ids.insert(action.action_id.as_str()) {
-                return Err(format!("duplicate algorithm action: {}", action.action_id));
+                return Err(AlgorithmError::DuplicateAction {
+                    action_id: action.action_id.clone(),
+                });
             }
             if action.decision_sequence > self.decision_sequence {
-                return Err("algorithm action references a future decision".into());
+                return Err(AlgorithmError::invariant(
+                    AlgorithmInvariant::ActionReferencesFutureDecision,
+                ));
             }
         }
         if !self.quality.legs.is_empty() {
@@ -727,7 +808,9 @@ impl AlgorithmRun {
                 .map(|leg| &leg.leg_id)
                 .collect::<std::collections::BTreeSet<_>>();
             if quality_leg_ids.len() != self.quality.legs.len() || quality_leg_ids != run_leg_ids {
-                return Err("algorithm quality legs must match algorithm run legs".into());
+                return Err(AlgorithmError::invariant(
+                    AlgorithmInvariant::QualityLegMismatch,
+                ));
             }
         }
         Ok(())

@@ -71,6 +71,17 @@ from ..reference.actions import (
     load_records,
     prepare_catalog_source,
 )
+from .presentation import (
+    market_choice_description as _market_choice_description,
+    market_choice_label as _market_choice_label,
+    market_group_summary as _market_group_summary,
+    market_result as _market_result,
+    observation_description as _observation_description,
+    provider_description as _provider_description,
+    result_outcome as _result_outcome,
+    route_views as _route_views,
+    visible_records as _visible,
+)
 from .workspace import (
     LIVE_MARKET_UNAVAILABLE_ACTIONS,
     SNAPSHOT_KIND_ACTIONS,
@@ -183,6 +194,20 @@ def handle_command(
         query = " ".join(arguments).strip()
         if not query:
             return _ask_market(session)
+        intent_choices = _ambiguous_market_intents(query)
+        if intent_choices:
+            session.market.query = query
+            session.market.intent_choices = intent_choices
+            session.enter_context(Routes.MARKET_INTENT)
+            return _choice(
+                state,
+                session,
+                summary=Text(
+                    f"“{query}”可能表示交易所、指数、板块或一组股票。请先确认你的意思。",
+                    style="yellow",
+                ),
+                status="这个名称有多种含义 · 请选择",
+            )
         return (_run_market_search(state, session, query),)
 
     if command.startswith("market-file:field:"):
@@ -265,6 +290,7 @@ def handle_success(
     kind = spec.route.kind
     if kind is ResultKind.MARKET:
         records = tuple(result or ())
+        knowledge = getattr(getattr(result, "evidence", None), "conclusion", None)
         visible = _visible(records)
         if spec.route.qualifier == "workspace-market":
             prompt = session.market.workspace_prompt
@@ -284,22 +310,38 @@ def handle_success(
                 "market",
                 records,
                 record_kind="workspace-market-results",
+                knowledge=knowledge,
             )
         session.market.records = visible
         if records:
-            return _show_record_choices(session, "market", visible)
-        session.enter_context(Routes.MARKET_MISSING)
+            return _show_record_choices(session, "market", visible, knowledge=knowledge)
+        session.enter_context(
+            Routes.MARKET_NOT_FOUND
+            if knowledge == "not_found_in_covered_scope"
+            else Routes.MARKET_MISSING
+        )
+        if knowledge == "not_found_in_covered_scope":
+            message = "在当前已完整覆盖的范围内未找到匹配记录。"
+            status = "已覆盖范围内未找到"
+        elif knowledge == "preparing":
+            message = "相关目录正在准备，完成后可以重试这次搜索。"
+            status = "目录正在准备"
+        elif knowledge == "known_but_stale":
+            message = "只找到陈旧的目录覆盖；请先刷新来源，再判断是否不存在。"
+            status = "目录覆盖已陈旧"
+        elif knowledge == "source_unavailable":
+            message = "相关目录来源当前不可用，暂时不能判断该标的是否存在。"
+            status = "目录来源不可用"
+        else:
+            message = "当前目录覆盖尚不足以判断是否存在匹配记录。"
+            status = "当前目录尚不足以判断"
         interaction = ChoiceInteraction(
             title=context_label(session.context, session.root_label),
-            summary=Text(
-                f"没有找到“{session.market.query or '这个代码'}”。"
-                "你可以选择交易所和品种，让项目准备相应目录。",
-                style="yellow",
-            ),
+            summary=Text(message, style="yellow"),
             actions=context_items(session, state),
         )
         session.interaction = interaction
-        return SetInteraction(interaction), SetStatus("没有找到匹配结果")
+        return SetInteraction(interaction), SetStatus(status)
 
     if kind is ResultKind.MARKET_CATALOG_SETUP:
         if isinstance(result, _CatalogReferenceUnavailable):
@@ -744,7 +786,18 @@ _RESULT_KINDS = frozenset(
 def _handle_market_context(
     state: Any, session: GuidedSession, command: str
 ) -> tuple[ScreenEffect, ...] | None:
-    if session.context == Routes.MARKET_MISSING:
+    if session.context == Routes.MARKET_INTENT:
+        action = action_id(context_items(session, state), command)
+        if action is None or not action.startswith("intent:"):
+            return None
+        try:
+            query = session.market.intent_choices[int(action.split(":", 1)[1])][0]
+        except (IndexError, ValueError):
+            return None
+        session.market.intent_choices = ()
+        return (_run_market_search(state, session, query),)
+
+    if session.context in {Routes.MARKET_MISSING, Routes.MARKET_NOT_FOUND}:
         action = action_id(context_items(session, state), command)
         if action == "prepare":
             session.market.catalog_setup_goal = None
@@ -1150,6 +1203,39 @@ def _market_prompt_copy(purpose: str) -> tuple[str, str]:
     }.get(purpose, ("输入代码或名称", "例如 AAPL、比特币或 BTCUSDT。"))
 
 
+def _ambiguous_market_intents(query: str) -> tuple[tuple[str, str, str], ...]:
+    """Expand only stable user-language aliases; never invent a canonical ID."""
+
+    normalized = "".join(query.split()).lower()
+    aliases = {
+        "上证": (
+            ("上海证券交易所", "上海证券交易所", "交易场所（上交所）"),
+            ("上证综合指数", "上证综合指数", "指数 Instrument，不是股票或交易所"),
+            ("上证50指数", "上证 50 指数", "指数 Instrument"),
+            ("上海证券交易所 股票", "浏览上交所上市股票", "按正式上市关系浏览"),
+            ("科创板 股票", "浏览科创板股票", "按市场板块浏览"),
+        ),
+        "深证": (
+            ("深圳证券交易所", "深圳证券交易所", "交易场所（深交所）"),
+            ("深证成份指数", "深证成份指数", "指数 Instrument，不是股票或交易所"),
+            ("深证100指数", "深证 100 指数", "指数 Instrument"),
+            ("深圳证券交易所 股票", "浏览深交所上市股票", "按正式上市关系浏览"),
+            ("创业板 股票", "浏览创业板股票", "按市场板块浏览"),
+        ),
+        "美国股票": (
+            ("美国 股票 上市", "浏览美国上市股票", "按来源声明的上市覆盖范围"),
+            ("美国 股票 市场", "浏览美国成交市场", "按已知 execution venues 浏览"),
+            ("美国 股票 provider", "浏览服务商股票目录", "Provider 产品目录，不代表上市地"),
+        ),
+        "美股": (
+            ("美国 股票 上市", "浏览美国上市股票", "按来源声明的上市覆盖范围"),
+            ("美国 股票 市场", "浏览美国成交市场", "按已知 execution venues 浏览"),
+            ("美国 股票 provider", "浏览服务商股票目录", "Provider 产品目录，不代表上市地"),
+        ),
+    }
+    return aliases.get(normalized, ())
+
+
 def _run_market_search(state: Any, session: GuidedSession, query: str) -> RunOperation:
     session.market.query = query
     return RunOperation(
@@ -1356,7 +1442,7 @@ def _confirm_catalog_preparation(
     plan = session.market.catalog_setup_plan
     if plan is None:
         return (_run_catalog_setup_plan(state, session),)
-    credential_binding = plan.credential_binding
+    connection_id = plan.connection_id
 
     def operation() -> Any:
         if state.dry_run or state.no_exec:
@@ -1364,8 +1450,8 @@ def _confirm_catalog_preparation(
         return prepare_catalog_source(
             state,
             plan,
-            credential_binding=(
-                str(credential_binding) if credential_binding else None
+            connection_id=(
+                str(connection_id) if connection_id else None
             ),
         )
 
@@ -1681,31 +1767,6 @@ def _load_operator_subscription_options(
     return {"subscriptions": subscriptions}
 
 
-def _observation_description(observations: Sequence[str]) -> str:
-    labels = {
-        "quote": "实时报价",
-        "trade": "逐笔成交",
-        "bar:1m": "1 分钟 K 线",
-        "greeks": "期权 Greeks",
-    }
-    return "、".join(labels.get(value, value) for value in observations) or "行情"
-
-
-def _provider_description(provider: str, routes: Sequence[Mapping[str, Any]]) -> str:
-    matching = tuple(
-        value for value in routes if str(value.get("provider") or "") == provider
-    )
-    observations = tuple(
-        dict.fromkeys(
-            str(observation)
-            for value in matching
-            for observation in value.get("observation_kinds", ())
-        )
-    )
-    content = _observation_description(observations)
-    return f"{content} · 可用"
-
-
 def _confirm_or_run(
     state: Any,
     session: GuidedSession,
@@ -1782,79 +1843,6 @@ def _record_choice(records: tuple[SelectionRecord, ...], value: str) -> object |
     return selected_value(records, value)
 
 
-def _market_result(
-    title: str, result: Any, *, diagnostic: bool = False
-) -> RenderableType:
-    labels = {
-        "status": "状态",
-        "state": "运行状态",
-        "market_id": "Market ID",
-        "instrument_id": "Instrument ID",
-        "provider": "Provider",
-        "data_type": "数据类型",
-        "dataset_id": "Dataset ID",
-        "record_count": "记录数",
-        "path": "路径",
-        "destination": "产物",
-        "freshness": "新鲜度",
-        "stale": "已过期",
-        "complete": "完整",
-        "reason": "原因",
-        "detail": "说明",
-        "error": "错误",
-    }
-    if isinstance(result, Mapping):
-        preview = str(result.get("status") or "").lower() == "preview"
-        rows = tuple(
-            (label, _market_result_value(result[key]))
-            for key, label in labels.items()
-            if key in result and result[key] is not None
-        )
-        return Group(
-            conclusion(
-                f"{title}预演完成，未执行任何修改" if preview else f"{title}已返回结果",
-                tone=(
-                    ResultTone.PREVIEW
-                    if preview
-                    else ResultTone.WARNING
-                    if diagnostic and result.get("error")
-                    else ResultTone.SUCCESS
-                ),
-            ),
-            facts(rows) if rows else Text("没有更多业务字段", style="dim"),
-        )
-    if isinstance(result, Sequence) and not isinstance(result, (str, bytes)):
-        table = Table("序号", "记录", show_header=True, header_style="bold")
-        for index, item in enumerate(result[:20], 1):
-            table.add_row(str(index), _market_result_value(item))
-        return Group(
-            conclusion(f"{title}共 {count(len(result))} 条记录"),
-            section("结果", table),
-            Text(
-                f"显示 {count(min(len(result), 20))} 条 · 其余 {count(max(len(result) - 20, 0))} 条",
-                style="dim",
-            ),
-        )
-    return conclusion(str(result) or f"{title}已完成")
-
-
-def _market_result_value(value: Any) -> str:
-    if isinstance(value, Mapping):
-        identity_value = (
-            value.get("market_id") or value.get("dataset_id") or value.get("provider")
-        )
-        return str(identity_value or "结构化记录")
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        return f"{count(len(value))} 项"
-    return str(value)
-
-
-def _result_outcome(result: Any) -> ActivityOutcome:
-    if isinstance(result, Mapping) and result.get("status") == "preview":
-        return ActivityOutcome.ATTENTION
-    return ActivityOutcome.SUCCESS
-
-
 def _spec(
     *,
     action_name: str,
@@ -1929,6 +1917,7 @@ def _show_record_choices(
     records: tuple[Any, ...],
     *,
     record_kind: str | None = None,
+    knowledge: str | None = None,
 ) -> tuple[ScreenEffect, ...]:
     session.enter(section, record_kind or "results")
     visible = _visible(records)
@@ -1942,133 +1931,31 @@ def _show_record_choices(
         )
         for index, record in enumerate(visible, 1)
     )
+    summary = _market_group_summary(records) if section == "market" else None
+    warning = {
+        "known_but_stale": "目录覆盖已陈旧；以下是上次成功同步的记录，不能据此确认当前状态。",
+        "source_unavailable": "目录来源当前不可用；以下已提交记录不能据此确认为最新。",
+        "preparing": "目录正在准备；以下仅显示已提交记录，不包含尚未完成同步的数据。",
+    }.get(knowledge or "")
+    if warning is not None:
+        warning_text = Text(warning, style="yellow")
+        summary = Group(warning_text, summary) if summary is not None else warning_text
+    elif knowledge == "found":
+        found_text = Text("结果使用本次查询开始时的最新已提交版本。", style="dim")
+        summary = Group(found_text, summary) if summary is not None else found_text
     interaction = ChoiceInteraction(
         title=(
             f"{session.root_label} / 市场与标的"
             if section == "market"
             else f"{session.root_label} / 市场标的"
         ),
-        summary=_market_group_summary(records) if section == "market" else None,
+        summary=summary,
         actions=actions,
     )
     return (
         SetInteraction(interaction),
         SetStatus(f"找到 {len(records)} 个结果 · 请选择"),
     )
-
-
-def _visible(records: tuple[Any, ...]) -> tuple[SelectionRecord, ...]:
-    return selection_records(
-        records,
-        label=_market_choice_label,
-        description=_market_choice_description,
-    )
-
-
-def _market_group_summary(records: tuple[Any, ...]) -> RenderableType:
-    groups: dict[str, list[str]] = {}
-    for record in records:
-        label = _market_group_label(record)
-        exchange = _exchange_label(getattr(record, "exchange_id", None))
-        exchanges = groups.setdefault(label, [])
-        if exchange not in exchanges:
-            exchanges.append(exchange)
-
-    lines = Text()
-    for label, exchanges in groups.items():
-        market_count = sum(
-            1 for record in records if _market_group_label(record) == label
-        )
-        if lines:
-            lines.append("\n")
-        lines.append(label, style="bold")
-        lines.append(f" · {market_count} 个市场 · ", style="dim")
-        lines.append("、".join(exchanges))
-    return Group(
-        Text("按交易品种归类；请选择一个具体市场。", style="dim"),
-        lines,
-    )
-
-
-def _market_choice_label(record: Any) -> str:
-    return _market_group_label(record)
-
-
-def _market_choice_description(record: Any) -> str:
-    exchange = _exchange_label(getattr(record, "exchange_id", None))
-    venue_symbol = str(getattr(record, "venue_symbol", None) or "").strip()
-    status = _STATUS_LABELS.get(str(getattr(record, "status", "")), "状态未知")
-    values = [exchange]
-    if venue_symbol:
-        values.append(venue_symbol)
-    values.append(status)
-    return " · ".join(values)
-
-
-def _market_group_label(record: Any) -> str:
-    kind = str(getattr(record, "instrument_kind", "unknown"))
-    kind_label = _INSTRUMENT_KIND_LABELS.get(kind, "其他品种")
-    base = _asset_label(getattr(record, "base_asset", None))
-    quote = _asset_label(getattr(record, "quote_asset", None))
-    if base and quote:
-        subject = f"{base}/{quote}"
-    else:
-        instrument = getattr(record, "instrument", None)
-        subject = str(
-            getattr(instrument, "display_symbol", None)
-            or getattr(record, "venue_symbol", None)
-            or "未命名品种"
-        )
-    return f"{subject} · {kind_label}"
-
-
-def _asset_label(value: Any) -> str:
-    if value is None:
-        return ""
-    return str(value).rsplit(":", 1)[-1]
-
-
-def _exchange_label(value: Any) -> str:
-    key = str(value or "").rsplit(":", 1)[-1]
-    return _EXCHANGE_LABELS.get(key.lower(), key or "未知交易所")
-
-
-_INSTRUMENT_KIND_LABELS = {
-    "equity": "股票",
-    "spot": "现货",
-    "perpetual": "永续合约",
-    "future": "期货",
-    "option": "期权",
-    "index": "指数",
-}
-
-_STATUS_LABELS = {
-    "active": "当前有效",
-    "trading": "正在交易",
-    "inactive": "当前不可用",
-    "halted": "暂停交易",
-    "delisted": "已退市",
-    "unknown": "状态未知",
-}
-
-_EXCHANGE_LABELS = {
-    "nasdaq": "Nasdaq",
-    "nyse": "NYSE",
-    "amex": "AMEX",
-    "binance": "Binance",
-    "okx": "OKX",
-    "hyperliquid": "Hyperliquid",
-}
-
-
-def _route_views(result: Any) -> tuple[MarketRouteView, ...]:
-    routes: list[MarketRouteView] = []
-    for route in result or ():
-        if isinstance(route, MarketRouteView):
-            routes.append(route)
-        elif isinstance(route, Mapping):
-            routes.append(MarketRouteView.from_mapping(route))
-    return tuple(routes)
 
 
 __all__ = [

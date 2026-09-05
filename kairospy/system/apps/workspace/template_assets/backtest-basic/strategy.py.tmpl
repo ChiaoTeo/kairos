@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from kairospy.strategy import BarEvent, Strategy, StrategyContext
+from kairospy.strategy import BarEvent, MarketId, Strategy, StrategyContext
 
 
 class DemoBacktest(Strategy):
@@ -13,9 +13,7 @@ class DemoBacktest(Strategy):
     def on_start(self, ctx: StrategyContext) -> None:
         ctx.state.set_int("bars", 0)
         market = ctx.reference.require_market(
-            symbol="BTCUSDT",
-            exchange="binance",
-            market_type="spot",
+            MarketId("market:binance:spot:BTCUSDT")
         )
         ctx.market.subscribe_bars(market, timeframe="1m")
 

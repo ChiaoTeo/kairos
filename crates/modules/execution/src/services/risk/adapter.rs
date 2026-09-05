@@ -327,15 +327,20 @@ impl SocketExecutionRiskReservations {
 }
 
 fn map_rpc_error(error: jsonrpsee::core::client::Error) -> RiskCommandFailure {
-    let message = error.to_string();
-    if message.contains("No such file")
-        || message.contains("Connection refused")
-        || message.contains("connection refused")
-        || message.contains("not found")
-    {
-        RiskCommandFailure::NotSent(message)
-    } else {
-        RiskCommandFailure::Indeterminate(message)
+    match error {
+        jsonrpsee::core::client::Error::Transport(source)
+            if source
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|error| {
+                    matches!(
+                        error.kind(),
+                        std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound
+                    )
+                }) =>
+        {
+            RiskCommandFailure::NotSent(source.to_string())
+        },
+        error => RiskCommandFailure::Indeterminate(error.to_string()),
     }
 }
 

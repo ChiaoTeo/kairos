@@ -42,7 +42,7 @@ struct BinanceStockSymbol {
 }
 
 impl InstrumentCatalogQuery for BinanceStocksRestConnection {
-    async fn fetch_instruments(&mut self) -> Result<ExternalInstrumentCatalog, IntegrationError> {
+    async fn fetch_instruments(&self) -> Result<ExternalInstrumentCatalog, IntegrationError> {
         let value = self
             .service
             .keyed_get("/sapi/v1/equity/market/exchangeInfo", &[])
@@ -66,11 +66,12 @@ impl InstrumentCatalogQuery for BinanceStocksRestConnection {
         Ok(ExternalInstrumentCatalog {
             participant: participant(),
             instruments,
+            venues: Vec::new(),
         })
     }
 
     async fn fetch_instruments_page(
-        &mut self,
+        &self,
         cursor: Option<&str>,
         limit: usize,
     ) -> Result<ExternalInstrumentCatalogPage, IntegrationError> {
@@ -79,6 +80,7 @@ impl InstrumentCatalogQuery for BinanceStocksRestConnection {
                 catalog: ExternalInstrumentCatalog {
                     participant: participant(),
                     instruments: Vec::new(),
+                    venues: Vec::new(),
                 },
                 next_cursor: None,
                 complete: true,
@@ -348,7 +350,7 @@ mod tests {
             )
             .unwrap();
         });
-        let mut connection = BinanceStocksRestConnection::new(
+        let connection = BinanceStocksRestConnection::new(
             crate::ConnectionKey::new("reference.binance.equity.test").unwrap(),
             BinanceRestConfig {
                 environment: "test".into(),

@@ -9,40 +9,40 @@ use super::{
     AccountCommitmentObservation, SocketExecutionIntentPlanner, SocketExecutionOrderAdmission,
 };
 use crate::domain::{
-    DependencyWatermarks, ExecuteStrategyIntent, OrderCommitment, QuoteObservation,
+    AdmissionError, DependencyWatermarks, ExecuteStrategyIntent, OrderCommitment, QuoteObservation,
     RiskAuthorizationContext, SubmitOrder,
 };
 
 enum PlanningRequest {
     AdvanceTime {
         event_time_unix_nanos: u64,
-        reply: std::sync::mpsc::SyncSender<Result<(), String>>,
+        reply: std::sync::mpsc::SyncSender<Result<(), AdmissionError>>,
     },
     Plan {
         intent: Box<ExecuteStrategyIntent>,
-        reply: std::sync::mpsc::SyncSender<Result<Vec<SubmitOrder>, String>>,
+        reply: std::sync::mpsc::SyncSender<Result<Vec<SubmitOrder>, AdmissionError>>,
     },
     LatestQuote {
         instrument_id: String,
         market_id: Option<String>,
-        reply: std::sync::mpsc::SyncSender<Result<Option<QuoteObservation>, String>>,
+        reply: std::sync::mpsc::SyncSender<Result<Option<QuoteObservation>, AdmissionError>>,
     },
 }
 
 enum AdmissionRequest {
     CommitmentObservation {
         account_id: String,
-        reply: std::sync::mpsc::SyncSender<Result<AccountCommitmentObservation, String>>,
+        reply: std::sync::mpsc::SyncSender<Result<AccountCommitmentObservation, AdmissionError>>,
     },
     Validate {
         request: SubmitOrder,
         active_commitments: Vec<OrderCommitment>,
-        reply: std::sync::mpsc::SyncSender<Result<OrderCommitment, String>>,
+        reply: std::sync::mpsc::SyncSender<Result<OrderCommitment, AdmissionError>>,
     },
     RiskContext {
         request: SubmitOrder,
         route: crate::domain::ExecutionRouteCandidate,
-        reply: std::sync::mpsc::SyncSender<Result<RiskAuthorizationContext, String>>,
+        reply: std::sync::mpsc::SyncSender<Result<RiskAuthorizationContext, AdmissionError>>,
     },
 }
 
@@ -71,24 +71,13 @@ impl DependencyCircuit {
         self.open_until.is_none_or(|until| Instant::now() >= until)
     }
 
-    fn record(&mut self, result: &Result<(), String>) {
+    fn record(&mut self, result: &Result<(), AdmissionError>) {
         let Err(error) = result else {
             self.consecutive_failures = 0;
             self.open_until = None;
             return;
         };
-        if ![
-            "transport",
-            "http",
-            "worker",
-            "socket",
-            "timeout",
-            "stale",
-            "not ready",
-        ]
-        .iter()
-        .any(|marker| error.to_ascii_lowercase().contains(marker))
-        {
+        if !error.retryable() {
             return;
         }
         self.consecutive_failures = self.consecutive_failures.saturating_add(1);
@@ -102,18 +91,18 @@ fn send_bounded<R>(
     sender: &std::sync::mpsc::SyncSender<R>,
     request: R,
     queue_name: &str,
-) -> Result<(), String> {
+) -> Result<(), AdmissionError> {
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut request = Some(request);
     loop {
         match sender.try_send(request.take().expect("dependency request present")) {
             Ok(()) => return Ok(()),
             Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
-                return Err(format!("execution {queue_name} worker is stopped"));
+                return Err(format!("execution {queue_name} worker is stopped").into());
             },
             Err(std::sync::mpsc::TrySendError::Full(value)) => {
                 if Instant::now() >= deadline {
-                    return Err(format!("execution {queue_name} queue is full"));
+                    return Err(format!("execution {queue_name} queue is full").into());
                 }
                 request = Some(value);
                 std::thread::sleep(Duration::from_millis(2));
@@ -133,7 +122,7 @@ impl QueuedExecutionIntentPlanner {
     pub fn start(
         mut planner: SocketExecutionIntentPlanner,
         capacity: usize,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AdmissionError> {
         let (sender, receiver) = std::sync::mpsc::sync_channel(capacity.max(1));
         let watermarks = Arc::new(RwLock::new(planner.dependency_watermarks()));
         let stop = Arc::new(AtomicBool::new(false));
@@ -187,8 +176,8 @@ impl QueuedExecutionIntentPlanner {
     fn request<T>(
         &mut self,
         request: PlanningRequest,
-        reply: std::sync::mpsc::Receiver<Result<T, String>>,
-    ) -> Result<T, String> {
+        reply: std::sync::mpsc::Receiver<Result<T, AdmissionError>>,
+    ) -> Result<T, AdmissionError> {
         if !self.circuit.permits() {
             return Err("execution planning dependency circuit is open".into());
         }
@@ -203,7 +192,10 @@ impl QueuedExecutionIntentPlanner {
 }
 
 impl QueuedExecutionIntentPlanner {
-    pub(crate) fn advance_time(&mut self, event_time_unix_nanos: u64) -> Result<(), String> {
+    pub(crate) fn advance_time(
+        &mut self,
+        event_time_unix_nanos: u64,
+    ) -> Result<(), AdmissionError> {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         self.request(
             PlanningRequest::AdvanceTime {
@@ -224,7 +216,7 @@ impl QueuedExecutionIntentPlanner {
     pub(crate) fn plan_intent(
         &mut self,
         intent: &ExecuteStrategyIntent,
-    ) -> Result<Vec<SubmitOrder>, String> {
+    ) -> Result<Vec<SubmitOrder>, AdmissionError> {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         self.request(
             PlanningRequest::Plan {
@@ -239,7 +231,7 @@ impl QueuedExecutionIntentPlanner {
         &mut self,
         instrument_id: &str,
         market_id: Option<&str>,
-    ) -> Result<Option<QuoteObservation>, String> {
+    ) -> Result<Option<QuoteObservation>, AdmissionError> {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         self.request(
             PlanningRequest::LatestQuote {
@@ -263,7 +255,7 @@ impl QueuedExecutionOrderAdmission {
     pub fn start(
         mut admission: SocketExecutionOrderAdmission,
         capacity: usize,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AdmissionError> {
         let (sender, receiver) = std::sync::mpsc::sync_channel(capacity.max(1));
         let watermarks = Arc::new(RwLock::new(admission.dependency_watermarks()));
         let stop = Arc::new(AtomicBool::new(false));
@@ -319,8 +311,8 @@ impl QueuedExecutionOrderAdmission {
     fn request<T>(
         &mut self,
         request: AdmissionRequest,
-        reply: std::sync::mpsc::Receiver<Result<T, String>>,
-    ) -> Result<T, String> {
+        reply: std::sync::mpsc::Receiver<Result<T, AdmissionError>>,
+    ) -> Result<T, AdmissionError> {
         if !self.circuit.permits() {
             return Err("execution admission dependency circuit is open".into());
         }
@@ -345,7 +337,7 @@ impl QueuedExecutionOrderAdmission {
     pub(crate) fn commitment_observation(
         &mut self,
         account_id: &str,
-    ) -> Result<AccountCommitmentObservation, String> {
+    ) -> Result<AccountCommitmentObservation, AdmissionError> {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         self.request(
             AdmissionRequest::CommitmentObservation {
@@ -360,7 +352,7 @@ impl QueuedExecutionOrderAdmission {
         &mut self,
         request: &SubmitOrder,
         active_commitments: &[OrderCommitment],
-    ) -> Result<OrderCommitment, String> {
+    ) -> Result<OrderCommitment, AdmissionError> {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         self.request(
             AdmissionRequest::Validate {
@@ -376,7 +368,7 @@ impl QueuedExecutionOrderAdmission {
         &mut self,
         request: &SubmitOrder,
         route: &crate::domain::ExecutionRouteCandidate,
-    ) -> Result<RiskAuthorizationContext, String> {
+    ) -> Result<RiskAuthorizationContext, AdmissionError> {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         self.request(
             AdmissionRequest::RiskContext {
@@ -393,12 +385,14 @@ impl QueuedExecutionOrderAdmission {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use super::DependencyCircuit;
+    use super::{AdmissionError, DependencyCircuit};
 
     #[test]
     fn dependency_circuit_opens_after_repeated_transport_failures() {
         let mut circuit = DependencyCircuit::default();
-        let failure = Err("transport timeout".to_string());
+        let failure = Err(AdmissionError::Dependency {
+            detail: "transport timeout".to_string(),
+        });
         assert!(circuit.permits());
         circuit.record(&failure);
         circuit.record(&failure);
@@ -412,7 +406,9 @@ mod tests {
     #[test]
     fn validation_errors_do_not_open_dependency_circuit() {
         let mut circuit = DependencyCircuit::default();
-        let failure = Err("order quantity must be positive".to_string());
+        let failure = Err(AdmissionError::Validation {
+            rule: "order quantity must be positive",
+        });
         for _ in 0..5 {
             circuit.record(&failure);
         }

@@ -21,7 +21,7 @@ from kairospy.contracts.reference import (
     ReferenceAsset,
     ReferenceCatalogCounts,
     ReferenceCatalogIntegrity,
-    ReferenceCatalogSnapshot,
+    ReferenceCatalogStatus,
     ReferenceClient,
     ReferenceHealthResponse,
     ReferenceInstrument,
@@ -31,10 +31,10 @@ from kairospy.contracts.reference import (
 )
 
 
-def _catalog_snapshot(
+def _catalog_status(
     *, generation: int, event_sequence: int, market_count: int
-) -> ReferenceCatalogSnapshot:
-    return ReferenceCatalogSnapshot(
+) -> ReferenceCatalogStatus:
+    return ReferenceCatalogStatus(
         GenerationRead(generation),
         SequenceRead(event_sequence),
         ReferenceCatalogCounts(0, 0, 0, 0, market_count, market_count),
@@ -65,12 +65,12 @@ def _reference_event(
     )
 
 
-class _ReferenceSnapshot:
+class _ReferenceReadSession:
     def __init__(self, generation: int, event_sequence: int) -> None:
         self.generation = generation
         self.event_sequence = event_sequence
 
-    def __enter__(self) -> _ReferenceSnapshot:
+    def __enter__(self) -> _ReferenceReadSession:
         return self
 
     def __exit__(self, *_args: object) -> None:
@@ -81,9 +81,9 @@ class _ReferenceCatalogClient:
     def __init__(self, snapshots: list[tuple[int, int]]) -> None:
         self._snapshots = snapshots
 
-    def snapshot(self) -> _ReferenceSnapshot:
+    def read_session(self) -> _ReferenceReadSession:
         generation, event_sequence = self._snapshots.pop(0)
-        return _ReferenceSnapshot(generation, event_sequence)
+        return _ReferenceReadSession(generation, event_sequence)
 
 
 def test_reference_live_notifications_resync_the_workspace_catalog() -> None:
@@ -154,7 +154,7 @@ def test_reference_live_notifications_reject_instance_scope() -> None:
         reference.visit_live(lambda _event: None)
 
 
-def test_reference_live_notifications_reject_a_trailing_catalog_snapshot() -> None:
+def test_reference_live_notifications_reject_a_trailing_catalog_read() -> None:
     event = _reference_event(8, 3)
 
     class LiveSource:
@@ -232,7 +232,7 @@ def _reference_database(tmp_path: Path) -> Path:
             id INTEGER PRIMARY KEY, schema_version INTEGER, generation INTEGER,
             event_sequence INTEGER, committed_at_unix_nanos INTEGER
         );
-        INSERT INTO reference_meta VALUES(1, 6, 3, 7, 123);
+        INSERT INTO reference_meta VALUES(1, 10, 3, 7, 123);
         CREATE TABLE reference_exchanges_current(
             exchange_id TEXT PRIMARY KEY, status TEXT, payload TEXT
         );
@@ -259,6 +259,40 @@ def _reference_database(tmp_path: Path) -> Path:
         CREATE TABLE reference_lifecycle(sequence INTEGER PRIMARY KEY, payload TEXT);
         CREATE TABLE reference_option_coverage(
             provider TEXT, underlying TEXT, enabled INTEGER
+        );
+        CREATE TABLE reference_venues_current(
+            venue_id TEXT PRIMARY KEY, venue_kind TEXT, mic TEXT,
+            operating_mic TEXT, parent_venue_id TEXT, jurisdiction TEXT,
+            status TEXT, payload TEXT
+        );
+        CREATE TABLE reference_venue_listings_current(
+            listing_id TEXT PRIMARY KEY, instrument_id TEXT,
+            listing_venue_id TEXT, market_segment_id TEXT,
+            listing_symbol TEXT, listing_role TEXT, status TEXT,
+            effective_to_unix_nanos INTEGER, payload TEXT
+        );
+        CREATE TABLE reference_venue_markets_current(
+            market_id TEXT PRIMARY KEY, instrument_id TEXT,
+            execution_venue_id TEXT, origin_listing_id TEXT,
+            market_segment_id TEXT, venue_symbol TEXT, status TEXT,
+            effective_to_unix_nanos INTEGER, payload TEXT
+        );
+        CREATE TABLE reference_provider_catalog_memberships_current(
+            source_id TEXT, instrument_id TEXT, provider_symbol TEXT,
+            provider_product TEXT, status TEXT,
+            effective_to_unix_nanos INTEGER, payload TEXT,
+            PRIMARY KEY(source_id, instrument_id)
+        );
+        CREATE TABLE reference_coverage_current(
+            coverage_id TEXT PRIMARY KEY, source_id TEXT,
+            completeness TEXT, state TEXT, generation INTEGER,
+            event_sequence INTEGER, last_attempt_unix_nanos INTEGER,
+            last_success_unix_nanos INTEGER, stale_after_unix_nanos INTEGER,
+            has_last_known_good INTEGER, payload TEXT
+        );
+        CREATE TABLE reference_source_registry(
+            source_id TEXT PRIMARY KEY, provider_id TEXT,
+            desired_state TEXT, definition_payload TEXT
         );
         """
     )
@@ -289,6 +323,77 @@ def _reference_database(tmp_path: Path) -> Path:
             market["status"],
             None,
             json.dumps(market),
+        ),
+    )
+    venue = {
+        "venue_id": "venue:binance",
+        "name": "Binance",
+        "venue_kind": "regulated_exchange",
+        "roles": ["listing", "execution"],
+        "mic": None,
+        "operating_mic": None,
+        "parent_venue_id": None,
+        "jurisdiction": None,
+        "status": "active",
+    }
+    venue_listing = {
+        "listing_id": "listing:binance:spot:BTCUSDT",
+        "instrument_id": "instrument:spot:BTC",
+        "listing_venue_id": "venue:binance",
+        "market_segment_id": None,
+        "listing_symbol": "BTCUSDT",
+        "listing_role": "primary",
+        "status": "active",
+        "effective_from_unix_nanos": 0,
+        "effective_to_unix_nanos": None,
+    }
+    venue_market = {
+        "market_id": market["market_id"],
+        "instrument_id": market["instrument_id"],
+        "execution_venue_id": "venue:binance",
+        "origin_listing_id": market["listing_id"],
+        "market_segment_id": None,
+        "venue_symbol": market["venue_symbol"],
+        "trading_calendar_id": None,
+        "trading_session_ids": [],
+        "base_asset_id": None,
+        "quote_asset_id": None,
+        "status": "active",
+        "trading_rules": {
+            "price_tick": None,
+            "quantity_tick": None,
+            "price_precision": 0,
+            "quantity_precision": 0,
+            "minimum_quantity": None,
+            "minimum_notional": None,
+            "contract_size": None,
+        },
+        "effective_from_unix_nanos": 0,
+        "effective_to_unix_nanos": None,
+    }
+    connection.execute(
+        "INSERT INTO reference_venues_current VALUES(?,?,?,?,?,?,?,?)",
+        (
+            venue["venue_id"], venue["venue_kind"], None, None, None, None,
+            venue["status"], json.dumps(venue),
+        ),
+    )
+    connection.execute(
+        "INSERT INTO reference_venue_listings_current VALUES(?,?,?,?,?,?,?,?,?)",
+        (
+            venue_listing["listing_id"], venue_listing["instrument_id"],
+            venue_listing["listing_venue_id"], None,
+            venue_listing["listing_symbol"], venue_listing["listing_role"],
+            venue_listing["status"], None, json.dumps(venue_listing),
+        ),
+    )
+    connection.execute(
+        "INSERT INTO reference_venue_markets_current VALUES(?,?,?,?,?,?,?,?,?)",
+        (
+            venue_market["market_id"], venue_market["instrument_id"],
+            venue_market["execution_venue_id"], venue_market["origin_listing_id"],
+            None, venue_market["venue_symbol"], venue_market["status"], None,
+            json.dumps(venue_market),
         ),
     )
     records = {
@@ -398,9 +503,23 @@ def test_reference_sqlite_client_reads_watermark_and_scoped_markets(tmp_path) ->
         "option_listings": 0,
         "option_markets": 0,
     }
-    assert (
-        client.resolve_market(symbol="BTCUSDT").instrument_id == "instrument:spot:BTC"
-    )
+    resolution = client.resolve_market(market_id="market:binance:spot:BTCUSDT")
+    assert resolution.resolution is not None
+    assert resolution.resolution.instrument.instrument_id == "instrument:spot:BTC"
+    venues = client.search_venues(query="Binance", role="execution")
+    assert [str(value.venue_id) for value in venues.venues] == ["venue:binance"]
+    assert venues.evidence.conclusion == "found"
+    listings = client.search_venue_listings(query="BTCUSDT")
+    assert [str(value.listing_venue_id) for value in listings.listings] == [
+        "venue:binance"
+    ]
+    markets = client.search_venue_markets(query="BTCUSDT")
+    assert [str(value.execution_venue_id) for value in markets.markets] == [
+        "venue:binance"
+    ]
+    assert [str(value.instrument_id) for value in markets.instruments] == [
+        "instrument:spot:BTC"
+    ]
     assert (
         len(
             client.markets(
@@ -524,9 +643,7 @@ def test_reference_application_reads_concrete_sqlite_client(tmp_path) -> None:
     )
     assert application.market(MarketId("market:missing")) is None
     with pytest.raises(ReferenceNotFoundError):
-        application.require_market(
-            symbol="ETHUSDT", exchange="binance", instrument_kind="spot"
-        )
+        application.require_market(MarketId("market:binance:spot:ETHUSDT"))
 
 
 def test_reference_application_exposes_typed_catalog_and_access_queries(
@@ -542,11 +659,25 @@ def test_reference_application_exposes_typed_catalog_and_access_queries(
     instrument = application.require_instrument(InstrumentId("instrument:spot:BTC"))
     assert isinstance(instrument, ReferenceInstrument)
     assert instrument.ref.display_symbol == "BTC"
+    assert instrument.settlement_asset_id is None
     assert isinstance(
         application.require_listing(ListingId("listing:binance:spot:BTCUSDT")),
         ReferenceListing,
     )
     assert application.require_market(market_id).venue_symbol == "BTCUSDT"
+
+
+def test_reference_settlement_asset_survives_sqlite_native_read(tmp_path) -> None:
+    database = _reference_database(tmp_path)
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE reference_instruments_current SET payload = "
+            "json_set(payload, '$.settlement_asset_id', ?) WHERE instrument_id = ?",
+            ("asset:crypto:BTC", "instrument:spot:BTC"),
+        )
+    application = ReferenceApplication(ReferenceClient(database_path=database))
+    instrument = application.require_instrument(InstrumentId("instrument:spot:BTC"))
+    assert instrument.settlement_asset_id == "asset:crypto:BTC"
 
 
 def test_reference_application_reads_option_chain_and_batch_ids(tmp_path) -> None:
@@ -569,13 +700,13 @@ def test_reference_application_reads_option_chain_and_batch_ids(tmp_path) -> Non
     assert chain[0].strike is not None and str(chain[0].strike) == "100000"
 
 
-def test_reference_application_snapshot_pins_generation_and_rows(tmp_path) -> None:
+def test_reference_application_read_session_pins_generation_and_rows(tmp_path) -> None:
     database = _reference_database(tmp_path)
     application = ReferenceApplication(ReferenceClient(database_path=database))
 
-    with application.snapshot() as snapshot:
-        assert (snapshot.generation, snapshot.event_sequence) == (3, 7)
-        before = snapshot.require_asset("asset:crypto:BTC")
+    with application.read_session() as session:
+        assert (session.generation, session.event_sequence) == (3, 7)
+        before = session.require_asset("asset:crypto:BTC")
         writer = sqlite3.connect(database)
         writer.execute(
             "UPDATE reference_meta SET generation = 4, event_sequence = 8 WHERE id = 1"
@@ -587,16 +718,16 @@ def test_reference_application_snapshot_pins_generation_and_rows(tmp_path) -> No
         )
         writer.commit()
         writer.close()
-        after = snapshot.require_asset("asset:crypto:BTC")
+        after = session.require_asset("asset:crypto:BTC")
         assert (after.asset_id, after.code, after.status) == (
             before.asset_id,
             before.code,
             before.status,
         )
-        assert (snapshot.generation, snapshot.event_sequence) == (3, 7)
+        assert (session.generation, session.event_sequence) == (3, 7)
 
     assert application.require_asset("asset:crypto:BTC").code == "XBT"
-    with application.snapshot() as latest:
+    with application.read_session() as latest:
         assert (latest.generation, latest.event_sequence) == (4, 8)
 
 
@@ -637,6 +768,50 @@ def test_market_id_lookup_is_not_truncated_by_catalog_size(tmp_path) -> None:
     connection.executemany(
         "INSERT INTO reference_markets_current VALUES(?,?,?,?,?,?,?,?,?,?,?)",
         rows,
+    )
+    venue_rows = []
+    for index in range(10_001):
+        market_id = f"market:test:{index:05d}"
+        payload = {
+            "market_id": market_id,
+            "instrument_id": "instrument:spot:BTC",
+            "execution_venue_id": "venue:binance",
+            "origin_listing_id": "listing:binance:spot:BTCUSDT",
+            "market_segment_id": None,
+            "venue_symbol": "TEST",
+            "trading_calendar_id": None,
+            "trading_session_ids": [],
+            "base_asset_id": None,
+            "quote_asset_id": None,
+            "status": "active",
+            "trading_rules": {
+                "price_tick": None,
+                "quantity_tick": None,
+                "price_precision": 0,
+                "quantity_precision": 0,
+                "minimum_quantity": None,
+                "minimum_notional": None,
+                "contract_size": None,
+            },
+            "effective_from_unix_nanos": 0,
+            "effective_to_unix_nanos": None,
+        }
+        venue_rows.append(
+            (
+                market_id,
+                payload["instrument_id"],
+                payload["execution_venue_id"],
+                payload["origin_listing_id"],
+                None,
+                payload["venue_symbol"],
+                payload["status"],
+                None,
+                json.dumps(payload),
+            )
+        )
+    connection.executemany(
+        "INSERT INTO reference_venue_markets_current VALUES(?,?,?,?,?,?,?,?,?)",
+        venue_rows,
     )
     connection.commit()
     connection.close()
@@ -698,7 +873,7 @@ def test_reference_client_scopes_refresh_and_provider_controls(
             "binding": {"provider": "massive", "source": "equity"},
             "scope": {"kind": "global"},
             "desired_state": "enabled",
-            "credential_binding": "massive-main",
+            "connection_id": "massive-main",
         }
     )
     client.set_source_paused("massive-options", True)
@@ -729,7 +904,7 @@ def test_reference_client_scopes_refresh_and_provider_controls(
                     "binding": {"provider": "massive", "source": "equity"},
                     "scope": {"kind": "global"},
                     "desired_state": "enabled",
-                    "credential_binding": "massive-main",
+                    "connection_id": "massive-main",
                 }
             ],
             5.0,
@@ -803,7 +978,7 @@ def test_reference_runtime_validation_covers_provider_snapshot_and_publication()
             }
 
         def catalog(self):
-            return _catalog_snapshot(generation=3, event_sequence=7, market_count=2)
+            return _catalog_status(generation=3, event_sequence=7, market_count=2)
 
     result = validate_reference_runtime(Client(), required_sources=("provider-a",))
 
@@ -828,7 +1003,7 @@ def test_reference_runtime_validation_reports_missing_provider_and_pending_outbo
             }
 
         def catalog(self):
-            return _catalog_snapshot(generation=1, event_sequence=0, market_count=0)
+            return _catalog_status(generation=1, event_sequence=0, market_count=0)
 
     result = validate_reference_runtime(Client(), required_sources=("provider-a",))
 
@@ -853,7 +1028,7 @@ def test_reference_validate_cli_returns_nonzero_when_a_required_gate_fails(
             }
 
         def catalog(self):
-            return _catalog_snapshot(generation=0, event_sequence=0, market_count=0)
+            return _catalog_status(generation=0, event_sequence=0, market_count=0)
 
     monkeypatch.setattr(
         "kairospy.surface.cli.commands.system.reference._workspace_reference_client",

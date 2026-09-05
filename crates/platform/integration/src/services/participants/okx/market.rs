@@ -15,6 +15,7 @@ pub(crate) fn quote(
     row: &Value,
 ) -> Result<MarketQuote, IntegrationError> {
     Ok(MarketQuote {
+        venue: Default::default(),
         symbol: symbol.clone(),
         bid_price: optional(row, "bidPx")?,
         bid_quantity: optional(row, "bidSz")?,

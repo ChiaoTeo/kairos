@@ -21,6 +21,7 @@ pub struct CliMarketApplication {
     workspace_root: Option<PathBuf>,
     direct_connection: Option<crate::services::direct::DirectMarketConnection>,
     historical_connection: Option<crate::services::direct::DirectHistoricalConnection>,
+    historical_reference: Option<kairos_reference_contract::ReferenceCatalog>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -65,6 +66,12 @@ pub enum CliDirectObservationResult {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct CliMarketQuoteResult {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bid_venue_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ask_venue_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tape: Option<u32>,
     pub symbol: String,
     pub data_type: &'static str,
     pub provider: String,
@@ -299,6 +306,7 @@ impl CliMarketApplication {
             workspace_root: workspace_root.map(Path::to_path_buf),
             direct_connection: None,
             historical_connection: None,
+            historical_reference: None,
         }
     }
 
@@ -310,17 +318,20 @@ impl CliMarketApplication {
             workspace_root: workspace_root.map(Path::to_path_buf),
             direct_connection: Some(direct_connection),
             historical_connection: None,
+            historical_reference: None,
         }
     }
 
     pub(crate) fn with_historical_connection(
         workspace_root: Option<&Path>,
         historical_connection: crate::services::direct::DirectHistoricalConnection,
+        historical_reference: Option<kairos_reference_contract::ReferenceCatalog>,
     ) -> Self {
         Self {
             workspace_root: workspace_root.map(Path::to_path_buf),
             direct_connection: None,
             historical_connection: Some(historical_connection),
+            historical_reference,
         }
     }
 
@@ -442,7 +453,7 @@ impl CliMarketApplication {
                     .ok_or("Binance historical download requires canonical --market-id")?,
             )?,
         };
-        let observations = self
+        let mut observations = self
             .historical_connection
             .as_mut()
             .ok_or("historical download was not composed with a provider connection")?
@@ -468,6 +479,43 @@ impl CliMarketApplication {
                 Provider::new(request.provider.as_str())?,
             )
             .await?;
+        if let Some(reference) = self.historical_reference.as_ref() {
+            for observation in &mut observations {
+                let crate::MarketObservation::Quote(quote) = observation else {
+                    continue;
+                };
+                if quote.bid_venue_code.is_none() && quote.ask_venue_code.is_none() {
+                    continue;
+                }
+                // One quote decision joins both side identities at one catalog watermark.
+                let session = reference.read_session()?;
+                for (code, identity) in [
+                    (&quote.bid_venue_code, &mut quote.bid_venue_id),
+                    (&quote.ask_venue_code, &mut quote.ask_venue_id),
+                ] {
+                    let Some(code) = code else {
+                        continue;
+                    };
+                    let venue = session
+                        .resolve_venue_identifier(
+                            &kairos_reference_contract::VenueIdentifierResolutionQuery {
+                                provider: quote.provider.clone(),
+                                provider_product: match request.market_type {
+                                    CliMarketHistoricalMarketType::Equity => "equity",
+                                    CliMarketHistoricalMarketType::Option => "options",
+                                    CliMarketHistoricalMarketType::Spot => "spot",
+                                }
+                                .into(),
+                                identifier_kind:
+                                    kairos_reference_contract::VenueIdentifierKind::Exchange,
+                                identifier: code.clone(),
+                            },
+                        )?
+                        .venue;
+                    *identity = crate::services::source::execution_venue_id(venue.as_ref());
+                }
+            }
+        }
         let output = request.file.clone();
         if let Some(parent) = output
             .parent()
@@ -530,11 +578,43 @@ impl CliMarketApplication {
     }
 }
 
+#[cfg(test)]
+mod quote_tests {
+    #[test]
+    fn standalone_quote_result_preserves_provider_evidence_without_claiming_canonical_ids() {
+        let quote = kairos_conflux::MarketQuote {
+            symbol: kairos_primitives::integration::ParticipantSymbol::new("AAPL").unwrap(),
+            venue: kairos_conflux::MarketVenueEvidence {
+                bid_exchange: Some("19".into()),
+                ask_exchange: Some("11".into()),
+                tape: Some(3),
+                ..Default::default()
+            },
+            bid_price: None,
+            bid_quantity: None,
+            ask_price: None,
+            ask_quantity: None,
+            last_price: None,
+            observed_at_unix_nanos: 7.into(),
+        };
+        let result = super::quote_snapshot(quote.into(), "massive");
+        let json = serde_json::to_value(result).unwrap();
+        assert_eq!(json["bid_venue_code"], "19");
+        assert_eq!(json["ask_venue_code"], "11");
+        assert_eq!(json["tape"], 3);
+        assert!(json.get("bid_venue_id").is_none());
+        assert!(json.get("ask_venue_id").is_none());
+    }
+}
+
 fn quote_snapshot(
     value: crate::services::direct::DirectQuoteSnapshot,
     provider: &str,
 ) -> CliMarketQuoteResult {
     CliMarketQuoteResult {
+        bid_venue_code: value.bid_venue_code,
+        ask_venue_code: value.ask_venue_code,
+        tape: value.tape,
         symbol: value.symbol,
         data_type: "quote",
         provider: provider.to_owned(),

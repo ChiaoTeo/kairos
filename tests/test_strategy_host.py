@@ -8,6 +8,7 @@ from io import StringIO
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 import pytest
 
 from kairospy.system.apps.launch import (
@@ -93,23 +94,27 @@ _MARKET = Market(
 )
 
 
-class _AcceptanceReferenceSnapshot:
+class _AcceptanceReferenceReadSession:
     generation = 42
     event_sequence = 9810
 
-    def __enter__(self) -> _AcceptanceReferenceSnapshot:
+    def __enter__(self) -> _AcceptanceReferenceReadSession:
         return self
 
     def __exit__(self, *_args: object) -> None:
         return None
 
-    def markets(self, **_filters: object) -> list[Market]:
-        return [_MARKET]
+    def resolve_market(self, **_filters: object) -> object:
+        return SimpleNamespace(
+            resolution=SimpleNamespace(market=_MARKET),
+            candidate_count=1,
+            evidence=SimpleNamespace(conclusion="found"),
+        )
 
 
 class _AcceptanceReferenceClient:
-    def snapshot(self) -> _AcceptanceReferenceSnapshot:
-        return _AcceptanceReferenceSnapshot()
+    def read_session(self) -> _AcceptanceReferenceReadSession:
+        return _AcceptanceReferenceReadSession()
 
 
 def EventEnvelope(
@@ -206,12 +211,8 @@ class ReferenceSubscriptionAcceptanceStrategy(Strategy):
         self.subscription: Subscription | SubscriptionGroup | None = None
 
     def on_start(self, context) -> None:
-        with context.reference.snapshot() as reference:
-            market = reference.require_market(
-                symbol="BTCUSDT",
-                exchange="test",
-                instrument_kind="spot",
-            )
+        with context.reference.read_session() as reference:
+            market = reference.require_market(MarketId("market:test:BTCUSDT"))
         self.subscription = context.market.subscribe_quotes(market)
 
 

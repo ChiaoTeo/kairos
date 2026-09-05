@@ -29,7 +29,7 @@ impl ReferenceSource for OkxSource {
 
     async fn fetch_catalog_with_connections(
         &mut self,
-        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        connections: &kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<ProviderCatalog> {
         let instrument_type = match self.product {
             OkxProduct::Spot => "SPOT",
@@ -42,7 +42,7 @@ impl ReferenceSource for OkxSource {
             ConnectionRef(key) => {
                 connections
                     .okx_public_rest
-                    .get(key)
+                    .get_shared(key)
                     .map_err(|error| ReferenceError::Provider(error.to_string()))?
                     .fetch_instruments_by_type(instrument_type)
                     .await
@@ -175,7 +175,11 @@ fn append_okx_instrument(
             )
         },
     };
-    for code in [&base, &quote] {
+    let settlement = value
+        .settlement_currency
+        .as_ref()
+        .map(|value| value.as_str().to_ascii_uppercase());
+    for code in [&base, &quote].into_iter().chain(settlement.as_ref()) {
         catalog.assets.push(Asset {
             asset_id: kairos_primitives::reference::AssetId::new(format!("asset:crypto:{code}"))?,
             code: kairos_primitives::reference::Symbol::new(code.clone())?,
@@ -201,6 +205,10 @@ fn append_okx_instrument(
         instrument_id: instrument_id.clone(),
         symbol: kairos_primitives::reference::Symbol::new(canonical_symbol)?,
         instrument_type: instrument_kind,
+        settlement_asset_id: settlement
+            .as_ref()
+            .map(|code| kairos_primitives::reference::AssetId::new(format!("asset:crypto:{code}")))
+            .transpose()?,
         primary_currency_asset_id: Some(kairos_primitives::reference::AssetId::new(format!(
             "asset:crypto:{}",
             if canonical_family == "spot" {

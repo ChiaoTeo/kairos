@@ -5,9 +5,12 @@ use super::*;
 /// Split an exact quantity deterministically.  The returned chunks sum to
 /// `total`; this makes retries and recovery stable because the child IDs can
 /// be derived from their ordinal.
-pub fn split_quantity(total: Quantity, policy: &SplitOrderPolicy) -> Result<Vec<Quantity>, String> {
+pub fn split_quantity(
+    total: Quantity,
+    policy: &SplitOrderPolicy,
+) -> Result<Vec<Quantity>, IntentError> {
     if total.is_zero() {
-        return Err("split quantity must be positive".into());
+        return Err(IntentError::SplitQuantityNotPositive { total });
     }
     policy.validate()?;
     let mut scale = total
@@ -24,16 +27,18 @@ pub fn split_quantity(total: Quantity, policy: &SplitOrderPolicy) -> Result<Vec<
         scale += 1;
         total_mantissa = total_mantissa
             .checked_mul(10)
-            .ok_or_else(|| "split quantity overflows".to_string())?;
+            .ok_or(IntentError::SplitOverflow {
+                operation: "scale expansion",
+            })?;
     }
     if count <= 0 || count > total_mantissa {
-        return Err("split policy produces an invalid child count".into());
+        return Err(IntentError::InvalidChildCount);
     }
     let base = total_mantissa / count;
     let remainder = total_mantissa % count;
     if let Some(minimum) = policy.min_child_quantity {
         if base < rescale_quantity(minimum, scale)? {
-            return Err("split policy minimum child quantity cannot be satisfied".into());
+            return Err(IntentError::MinimumChildQuantityUnsatisfied);
         }
     }
     let mut chunks = Vec::with_capacity(count as usize);
@@ -46,14 +51,18 @@ pub fn split_quantity(total: Quantity, policy: &SplitOrderPolicy) -> Result<Vec<
     Ok(chunks)
 }
 
-fn rescale_quantity(value: Quantity, scale: u8) -> Result<i64, String> {
+fn rescale_quantity(value: Quantity, scale: u8) -> Result<i64, IntentError> {
     let factor = 10_i64
         .checked_pow(u32::from(scale.saturating_sub(value.scale())))
-        .ok_or_else(|| "split quantity scale overflows".to_string())?;
+        .ok_or(IntentError::SplitOverflow {
+            operation: "scale factor",
+        })?;
     value
         .mantissa()
         .checked_mul(factor)
-        .ok_or_else(|| "split quantity overflows".to_string())
+        .ok_or(IntentError::SplitOverflow {
+            operation: "mantissa rescaling",
+        })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -74,22 +83,34 @@ impl ExecutionPlan {
         legs: Vec<ExecutionLeg>,
         completion_policy: CompletionPolicy,
         failure_policy: FailurePolicy,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, IntentError> {
         let value = Self {
-            plan_id: PlanId::new(plan_id.into()).map_err(|error| error.to_string())?,
-            intent_id: IntentId::new(intent_id.into()).map_err(|error| error.to_string())?,
+            plan_id: PlanId::new(plan_id.into()).map_err(|source| {
+                IntentError::InvalidSemantic {
+                    field: "plan_id",
+                    source,
+                }
+            })?,
+            intent_id: IntentId::new(intent_id.into()).map_err(|source| {
+                IntentError::InvalidSemantic {
+                    field: "intent_id",
+                    source,
+                }
+            })?,
             intent_type,
             legs,
             completion_policy,
             failure_policy,
         };
         if value.legs.is_empty() {
-            return Err("execution plan requires at least one leg".into());
+            return Err(IntentError::EmptyPlan);
         }
         let mut ids = std::collections::BTreeSet::new();
         for leg in &value.legs {
             if !ids.insert(leg.leg_id.clone()) {
-                return Err(format!("duplicate execution leg: {}", leg.leg_id));
+                return Err(IntentError::DuplicateLeg {
+                    leg_id: leg.leg_id.clone(),
+                });
             }
         }
         Ok(value)

@@ -155,6 +155,8 @@ def wait(
     except LaunchRuntimeError as error:
         raise typer.BadParameter(str(error)) from error
     _emit(value, output)
+    if value.get("status") == "failed":
+        raise typer.Exit(code=1)
 
 
 @launch_app.command("stop", help="Stop a launch and release its runtime resources.")

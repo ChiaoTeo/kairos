@@ -19,16 +19,16 @@ pub struct SplitOrderPolicy {
 }
 
 impl SplitOrderPolicy {
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), IntentError> {
         if self.max_child_quantity.is_some_and(|value| value.is_zero())
             || self.min_child_quantity.is_some_and(|value| value.is_zero())
             || self.child_count.is_some_and(|value| value == 0)
         {
-            return Err("split policy quantities and child_count must be positive".into());
+            return Err(IntentError::SplitPolicyNonPositive);
         }
         if let (Some(minimum), Some(maximum)) = (self.min_child_quantity, self.max_child_quantity) {
             if minimum > maximum {
-                return Err("split policy minimum exceeds maximum child quantity".into());
+                return Err(IntentError::SplitMinimumExceedsMaximum);
             }
         }
         Ok(())
@@ -52,20 +52,18 @@ pub struct PassiveLimitPolicy {
 }
 
 impl PassiveLimitPolicy {
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), IntentError> {
         if self.reprice_interval.get() == 0 || self.max_quote_age.get() == 0 {
-            return Err(
-                "passive-limit reprice interval and maximum quote age must be positive".into(),
-            );
+            return Err(IntentError::InvalidPassiveLimitPolicy);
         }
         Ok(())
     }
 }
 
 impl TwapPolicy {
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), IntentError> {
         if self.slice_count < 2 || self.slice_interval.get() == 0 {
-            return Err("TWAP requires at least two slices and a positive interval".into());
+            return Err(IntentError::InvalidTwapPolicy);
         }
         Ok(())
     }
@@ -84,13 +82,13 @@ pub struct MakerExecutionPolicy {
 }
 
 impl MakerExecutionPolicy {
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), IntentError> {
         if self
             .max_inventory_abs
             .is_some_and(|value| value.is_negative())
             || self.max_quote_age.is_some_and(|value| value.get() == 0)
         {
-            return Err("maker execution policy contains an invalid limit".into());
+            return Err(IntentError::InvalidMakerPolicy);
         }
         Ok(())
     }
@@ -135,22 +133,22 @@ fn default_compensation_attempts() -> u32 {
 }
 
 impl HedgePolicy {
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), IntentError> {
         if self.leader_leg_id == self.hedge_leg_id
             || self.max_compensation_attempts == 0
             || self
                 .max_unhedged_duration
                 .is_some_and(|duration| duration.get() == 0)
         {
-            return Err("hedge policy is invalid".into());
+            return Err(IntentError::InvalidHedgePolicy);
         }
         let mut routes = std::collections::BTreeSet::new();
-        if self
-            .fallback_execution_route_ids
-            .iter()
-            .any(|route_id| !routes.insert(route_id))
-        {
-            return Err("hedge fallback execution routes must be unique".into());
+        for route_id in &self.fallback_execution_route_ids {
+            if !routes.insert(route_id) {
+                return Err(IntentError::DuplicateHedgeRoute {
+                    route_id: route_id.clone(),
+                });
+            }
         }
         Ok(())
     }
@@ -159,23 +157,36 @@ impl HedgePolicy {
         &self,
         leader_filled: Quantity,
         hedge_filled: Quantity,
-    ) -> Result<Quantity, String> {
+    ) -> Result<Quantity, IntentError> {
         let required = self
             .ratio
             .apply_to_nonnegative(leader_filled.mantissa())
-            .map_err(|error| error.to_string())?;
+            .map_err(|source| IntentError::Arithmetic {
+                operation: "hedge ratio application",
+                source,
+            })?;
         let required = self
             .contract_multiplier
             .apply_to_nonnegative(required)
-            .map_err(|error| error.to_string())?;
-        let required =
-            Quantity::new(required, leader_filled.scale()).map_err(|error| error.to_string())?;
+            .map_err(|source| IntentError::Arithmetic {
+                operation: "hedge contract multiplier application",
+                source,
+            })?;
+        let required = Quantity::new(required, leader_filled.scale()).map_err(|source| {
+            IntentError::Arithmetic {
+                operation: "hedge quantity construction",
+                source,
+            }
+        })?;
         if hedge_filled >= required {
             Ok(Quantity::ZERO)
         } else {
             required
                 .checked_sub(hedge_filled)
-                .map_err(|error| error.to_string())
+                .map_err(|source| IntentError::Arithmetic {
+                    operation: "filled hedge subtraction",
+                    source,
+                })
         }
     }
 }
@@ -195,7 +206,7 @@ pub enum ExecutionAlgorithmPolicy {
 }
 
 impl ExecutionAlgorithmPolicy {
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), IntentError> {
         match self {
             Self::Immediate => Ok(()),
             Self::Twap(policy) => policy.validate(),

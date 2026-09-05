@@ -321,6 +321,7 @@ impl ConfluxActor for MarketApplication {
                         integration.identity.descriptor.connection_key.as_str(),
                         integration.identity.generation,
                         event,
+                        context,
                     )
                     .await?;
                 }
@@ -616,8 +617,6 @@ impl MarketApplication {
         query: &kairos_market_contract::MarketDataRoutesQuery,
         context: &mut Context<'_, Self>,
     ) -> Result<Option<Vec<crate::ResolvedMarket>>, MarketError> {
-        use kairos_primitives::reference::ReferenceStatus;
-
         let Some(reference) = self.conflux.reference_demand.as_ref() else {
             return Ok(None);
         };
@@ -629,12 +628,18 @@ impl MarketApplication {
                     reference.client_key
                 ))
             })?;
-        let page = client
-            .market_catalog(&kairos_reference_contract::MarketCatalogQuery {
-                market_id: query.market_id.clone(),
+        let session = client
+            .read_session()
+            .map_err(|error| MarketError::SourceUnavailable(error.to_string()))?;
+        let page = session
+            .search_venue_markets(&kairos_reference_contract::VenueMarketSearchQuery {
+                market_ids: query.market_id.clone().map(|value| vec![value]),
                 instrument_id: query.instrument_id.clone(),
-                statuses: vec![ReferenceStatus::Active, ReferenceStatus::Trading],
-                limit: if query.market_id.is_some() { 1 } else { 10_000 },
+                active_only: true,
+                page: kairos_reference_contract::ReferencePage {
+                    limit: Some(if query.market_id.is_some() { 2 } else { 1_000 }),
+                    offset: 0,
+                },
                 ..Default::default()
             })
             .map_err(|error| MarketError::SourceUnavailable(error.to_string()))?;
@@ -1133,8 +1138,7 @@ impl MarketApplication {
         target: &MarketTarget,
         context: &mut Context<'_, Self>,
     ) -> Result<Option<Vec<crate::ResolvedMarket>>, MarketError> {
-        use kairos_primitives::reference::{InstrumentKind, ReferenceStatus};
-        use kairos_reference_contract::MarketCatalogQuery;
+        use kairos_primitives::reference::InstrumentKind;
 
         let Some(reference) = self.conflux.reference_demand.as_ref() else {
             return Ok(None);
@@ -1147,15 +1151,18 @@ impl MarketApplication {
                     reference.client_key
                 ))
             })?;
-        let mut query = MarketCatalogQuery {
-            statuses: vec![ReferenceStatus::Active, ReferenceStatus::Trading],
-            limit: 10_000,
+        let mut query = kairos_reference_contract::VenueMarketSearchQuery {
+            active_only: true,
+            page: kairos_reference_contract::ReferencePage {
+                limit: Some(1_000),
+                offset: 0,
+            },
             ..Default::default()
         };
         match target {
             MarketTarget::Market { market_id } => {
-                query.market_id = Some(market_id.clone());
-                query.limit = 1;
+                query.market_ids = Some(vec![market_id.clone()]);
+                query.page.limit = Some(2);
             },
             MarketTarget::ConsolidatedInstrument { instrument_id, .. } => {
                 query.instrument_id = Some(instrument_id.clone());
@@ -1170,8 +1177,24 @@ impl MarketApplication {
                     instrument_id.clone()
                 } else if let Some(market_id) = underlying_market_id {
                     client
-                        .require_market(market_id)
+                        .read_session()
+                        .and_then(|session| {
+                            session.resolve_market(
+                                &kairos_reference_contract::MarketResolutionQuery {
+                                    market_id: Some(market_id.clone()),
+                                    active_only: true,
+                                    ..Default::default()
+                                },
+                            )
+                        })
                         .map_err(|error| MarketError::SourceUnavailable(error.to_string()))?
+                        .resolution
+                        .ok_or_else(|| {
+                            MarketError::InvalidSubscription(format!(
+                                "underlying Reference market is missing: {market_id}"
+                            ))
+                        })?
+                        .instrument
                         .instrument_id
                 } else {
                     return Err(MarketError::InvalidSubscription(
@@ -1180,11 +1203,12 @@ impl MarketApplication {
                 };
                 query.underlying_instrument_id = Some(underlying);
                 query.instrument_kind = Some(InstrumentKind::Option);
-                query.limit = u64::from(limit.unwrap_or(10_000));
+                query.page.limit = Some(u64::from(limit.unwrap_or(1_000)));
             },
         }
         let page = client
-            .market_catalog(&query)
+            .read_session()
+            .and_then(|session| session.search_venue_markets(&query))
             .map_err(|error| MarketError::SourceUnavailable(error.to_string()))?;
         reference
             .resolver
@@ -1840,6 +1864,7 @@ impl MarketApplication {
         connection_key: &str,
         generation: u64,
         event: kairos_conflux::MarketEvent,
+        context: &mut Context<'_, Self>,
     ) -> Result<(), MarketError> {
         let source_id = MarketFeedId::new(connection_key)
             .map_err(|error| MarketError::Invalid(error.to_string()))?;
@@ -1862,13 +1887,85 @@ impl MarketApplication {
         let Some(market) = markets.next() else {
             return Ok(());
         };
-        if let Some(input) = normalize(&market, event)
-            .map_err(MarketError::Invalid)?
-            .map(|value| with_epoch(value, source_id, SourceEpoch::new(generation.max(1))))
+        let [trade_venue, bid_venue, ask_venue] =
+            self.resolve_observation_venues(&market, &event, context)?;
+        if let Some(input) = normalize(
+            &market,
+            event,
+            trade_venue.as_ref(),
+            bid_venue.as_ref(),
+            ask_venue.as_ref(),
+        )
+        .map_err(MarketError::Invalid)?
+        .map(|value| with_epoch(value, source_id, SourceEpoch::new(generation.max(1))))
         {
             self.apply_source_input(input).await?;
         }
         Ok(())
+    }
+
+    fn resolve_observation_venues(
+        &self,
+        market: &crate::ResolvedMarket,
+        event: &kairos_conflux::MarketEvent,
+        context: &mut Context<'_, Self>,
+    ) -> Result<[Option<kairos_reference_contract::Venue>; 3], MarketError> {
+        let Some(binding) = market.runtime_route() else {
+            return Ok([None, None, None]);
+        };
+        if binding.provider.as_str() != "massive" {
+            return Ok([None, None, None]);
+        }
+        let identifiers = match event.kind {
+            kairos_conflux::MarketEventKind::Trade => {
+                [event.venue.trade_exchange.as_deref(), None, None]
+            },
+            kairos_conflux::MarketEventKind::Quote | kairos_conflux::MarketEventKind::Snapshot => [
+                None,
+                event.venue.bid_exchange.as_deref(),
+                event.venue.ask_exchange.as_deref(),
+            ],
+            _ => [None, None, None],
+        };
+        if identifiers.iter().all(Option::is_none) {
+            return Ok([None, None, None]);
+        }
+        let Some(reference) = self.conflux.reference_demand.as_ref() else {
+            return Ok([None, None, None]);
+        };
+        let client = context
+            .reference_client(&reference.client_key)
+            .ok_or_else(|| {
+                MarketError::SourceUnavailable(format!(
+                    "managed Reference client is missing: {}",
+                    reference.client_key
+                ))
+            })?;
+        let venues = client
+            .read_session()
+            .and_then(|session| {
+                // All side identities belong to one catalog transaction/watermark.
+                let mut venues = [None, None, None];
+                for (index, identifier) in identifiers.into_iter().enumerate() {
+                    let Some(identifier) = identifier else {
+                        continue;
+                    };
+                    venues[index] = session
+                        .resolve_venue_identifier(
+                            &kairos_reference_contract::VenueIdentifierResolutionQuery {
+                                provider: binding.provider.clone(),
+                                provider_product: binding.provider_segment.to_string(),
+                                identifier_kind:
+                                    kairos_reference_contract::VenueIdentifierKind::Exchange,
+                                identifier: identifier.to_owned(),
+                            },
+                        )?
+                        .venue;
+                }
+                Ok(venues)
+            })
+            .map_err(|error| MarketError::SourceUnavailable(error.to_string()))?;
+        Ok(venues)
     }
 
     async fn poll_managed_snapshot(
@@ -1908,8 +2005,13 @@ impl MarketApplication {
         {
             Ok(quotes) => {
                 for quote in quotes {
-                    self.apply_managed_market_event(source_id.as_str(), 1, quote_event(quote))
-                        .await?;
+                    self.apply_managed_market_event(
+                        source_id.as_str(),
+                        1,
+                        quote_event(quote),
+                        context,
+                    )
+                    .await?;
                 }
             },
             Err(error) => {

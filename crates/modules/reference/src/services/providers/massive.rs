@@ -1,7 +1,12 @@
 //! Massive Reference sources, scoped discovery, and canonical mapping.
 
+use std::collections::BTreeSet;
+
+use kairos_primitives::reference::ReferenceSourceId;
+
 use super::*;
 use crate::logging::events as log_events;
+use crate::services::sources::SourceChanges;
 
 /// Massive stock-options discovery limited to explicitly managed underlyings.
 ///
@@ -13,11 +18,13 @@ use crate::logging::events as log_events;
 pub struct MassiveOptionsCoverageSource {
     api_key: String,
     base_url: String,
+    environment: String,
     scopes: BTreeMap<String, ScopedMassiveOptions>,
     last_good: BTreeMap<String, ProviderCatalog>,
     sync_store: SqlxProviderSyncStore,
     next_scope: usize,
     coverage_dirty: bool,
+    removed_scans: BTreeSet<ReferenceSourceId>,
 }
 
 struct ScopedMassiveOptions {
@@ -29,7 +36,7 @@ struct ScopedMassiveOptions {
 
 struct MassiveScopeAdvanceResult {
     catalog: ProviderCatalog,
-    facts_persisted: bool,
+    staged_changes: Option<SourceChanges>,
     pages_done: u64,
     records_seen: u64,
     records_changed: Option<u64>,
@@ -65,7 +72,7 @@ impl MassiveOptionsCoverageSource {
         Ok((
             key,
             MassiveRestConfig {
-                environment: "public".into(),
+                environment: self.environment.clone(),
                 endpoint: self.base_url.clone(),
                 api_key: secrecy::SecretString::new(self.api_key.clone().into()),
                 instrument_query: MassiveInstrumentQuery::options(Some(underlying)),
@@ -76,6 +83,7 @@ impl MassiveOptionsCoverageSource {
     pub(crate) async fn from_keys(
         api_key: impl Into<String>,
         base_url: impl Into<String>,
+        environment: impl Into<String>,
         sync_store: SqlxProviderSyncStore,
         connections: Vec<(String, kairos_conflux::ConnectionKey)>,
     ) -> ReferenceResult<Self> {
@@ -88,11 +96,13 @@ impl MassiveOptionsCoverageSource {
         let mut source = Self {
             api_key: api_key.into(),
             base_url: base_url.into(),
+            environment: environment.into(),
             scopes: BTreeMap::new(),
             last_good: BTreeMap::new(),
             sync_store,
             next_scope: 0,
             coverage_dirty: false,
+            removed_scans: BTreeSet::new(),
         };
         for (underlying, key) in connections {
             source.load_scope_with_key(&underlying, key).await?;
@@ -129,7 +139,7 @@ impl MassiveOptionsCoverageSource {
                 .map_err(|error| ReferenceError::Provider(error.to_string()))?;
             keys.push((underlying, key));
         }
-        let source = Self::from_keys(api_key, base_url, sync_store, keys).await?;
+        let source = Self::from_keys(api_key, base_url, "public", sync_store, keys).await?;
         Ok((source, system))
     }
 
@@ -202,9 +212,8 @@ impl MassiveOptionsCoverageSource {
             self.load_scope_with_key(&underlying, connection_key)
                 .await?;
         } else {
-            self.sync_store
-                .remove_last_good(&Self::scope_key(&underlying))
-                .await?;
+            self.removed_scans
+                .insert(ReferenceSourceId::new(Self::scope_key(&underlying))?);
             self.scopes.remove(&underlying);
             self.last_good.remove(&underlying);
             self.next_scope = 0;
@@ -280,7 +289,7 @@ impl MassiveOptionsCoverageSource {
     async fn advance_one_scope(
         &mut self,
         underlying: &str,
-        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        connections: &kairos_conflux::ConnectionCollections<'_>,
         record_limit: usize,
     ) -> ReferenceResult<MassiveScopeAdvance> {
         let key = Self::scope_key(underlying);
@@ -291,6 +300,9 @@ impl MassiveOptionsCoverageSource {
                 .expect("enabled coverage scope is present");
             (scope.legacy_accumulated.take(), scope.cursor.clone())
         };
+        if cursor.is_none() && legacy.is_none() {
+            self.sync_store.clear_staged_pages(&key).await?;
+        }
         if let Some(legacy) = legacy {
             self.sync_store
                 .append_staged_page(&key, cursor.as_deref(), &legacy)
@@ -307,7 +319,7 @@ impl MassiveOptionsCoverageSource {
                         MASSIVE_PAGE_TIMEOUT,
                         connections
                             .massive_rest
-                            .get(connection_key)
+                            .get_shared(connection_key)
                             .map_err(|error| ReferenceError::Provider(error.to_string()))?
                             .fetch_instruments_page(cursor.as_deref(), record_limit),
                     )
@@ -360,7 +372,7 @@ impl MassiveOptionsCoverageSource {
         }
         let normalized = self.sync_store.supports_normalized_promotion();
         let (catalog, records_changed) = if normalized {
-            let records_changed = self.sync_store.promote_staged(&key).await?;
+            let records_changed = self.sync_store.staged_change_count(&key).await?;
             (ProviderCatalog::default(), Some(records_changed))
         } else {
             let catalog = self
@@ -387,7 +399,10 @@ impl MassiveOptionsCoverageSource {
                 .pages_done = 0;
             Ok(MassiveScopeAdvance::Complete(MassiveScopeAdvanceResult {
                 catalog: ProviderCatalog::default(),
-                facts_persisted: true,
+                staged_changes: Some(SourceChanges {
+                    completed_scans: BTreeSet::from([ReferenceSourceId::new(&key)?]),
+                    removed_scans: BTreeSet::new(),
+                }),
                 pages_done,
                 records_seen,
                 records_changed,
@@ -400,7 +415,7 @@ impl MassiveOptionsCoverageSource {
                 .pages_done = 0;
             Ok(MassiveScopeAdvance::Complete(MassiveScopeAdvanceResult {
                 catalog: self.merged_last_good()?,
-                facts_persisted: false,
+                staged_changes: None,
                 pages_done,
                 records_seen,
                 records_changed: None,
@@ -551,7 +566,7 @@ impl ReferenceSource for MassiveOptionsCoverageSource {
 
     async fn fetch_catalog_with_connections(
         &mut self,
-        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        connections: &kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<ProviderCatalog> {
         Ok(self
             .fetch_catalog_step_with_connections(connections)
@@ -561,7 +576,7 @@ impl ReferenceSource for MassiveOptionsCoverageSource {
 
     async fn fetch_catalog_step_with_connections(
         &mut self,
-        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        connections: &kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<SourceUpdate> {
         self.fetch_catalog_step_with_budget(connections, SourceTickBudget::default())
             .await
@@ -569,7 +584,7 @@ impl ReferenceSource for MassiveOptionsCoverageSource {
 
     async fn fetch_catalog_step_with_budget(
         &mut self,
-        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        connections: &kairos_conflux::ConnectionCollections<'_>,
         budget: SourceTickBudget,
     ) -> ReferenceResult<SourceUpdate> {
         let result = async {
@@ -584,7 +599,10 @@ impl ReferenceSource for MassiveOptionsCoverageSource {
                     },
                     complete: true,
                     page_count: 0,
-                    facts_persisted: normalized,
+                    staged_changes: normalized.then(|| SourceChanges {
+                        completed_scans: BTreeSet::new(),
+                        removed_scans: std::mem::take(&mut self.removed_scans),
+                    }),
                     work_item_id: Some("massive-options:coverage".to_owned()),
                     scope_id: None,
                     scope_kind: Some("coverage".to_owned()),
@@ -598,7 +616,7 @@ impl ReferenceSource for MassiveOptionsCoverageSource {
                     catalog: ProviderCatalog::default(),
                     complete: true,
                     page_count: 0,
-                    facts_persisted: normalized,
+                    staged_changes: normalized.then(SourceChanges::default),
                     work_item_id: Some("massive-options:coverage".to_owned()),
                     scope_id: None,
                     scope_kind: Some("coverage".to_owned()),
@@ -630,7 +648,7 @@ impl ReferenceSource for MassiveOptionsCoverageSource {
                     pages_total: Some(result.pages_done),
                     records_seen: Some(result.records_seen),
                     records_changed: result.records_changed,
-                    facts_persisted: result.facts_persisted,
+                    staged_changes: result.staged_changes,
                     work_item_id,
                     scope_id,
                     scope_kind,
@@ -646,7 +664,7 @@ impl ReferenceSource for MassiveOptionsCoverageSource {
                     page_count: 1,
                     pages_done: Some(pages_done),
                     records_seen: Some(records_seen),
-                    facts_persisted: false,
+                    staged_changes: None,
                     work_item_id,
                     scope_id,
                     scope_kind,
@@ -666,7 +684,7 @@ impl ReferenceSource for MassiveOptionsCoverageSource {
                     page_count: 1,
                     pages_done: Some(pages_done),
                     records_seen: Some(records_seen),
-                    facts_persisted: false,
+                    staged_changes: None,
                     work_item_id,
                     scope_id,
                     scope_kind,
@@ -694,13 +712,13 @@ impl ReferenceSource for MassiveEquitySource {
 
     async fn fetch_catalog_with_connections(
         &mut self,
-        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        connections: &kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<ProviderCatalog> {
         let facts = match &mut self.connection {
             ConnectionRef(key) => {
                 connections
                     .massive_rest
-                    .get(key)
+                    .get_shared(key)
                     .map_err(|error| ReferenceError::Provider(error.to_string()))?
                     .fetch_instruments()
                     .await
@@ -712,7 +730,7 @@ impl ReferenceSource for MassiveEquitySource {
 
     async fn fetch_catalog_step_with_connections(
         &mut self,
-        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        connections: &kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<SourceUpdate> {
         self.fetch_catalog_step_with_budget(connections, SourceTickBudget::default())
             .await
@@ -720,7 +738,7 @@ impl ReferenceSource for MassiveEquitySource {
 
     async fn fetch_catalog_step_with_budget(
         &mut self,
-        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        connections: &kairos_conflux::ConnectionCollections<'_>,
         budget: SourceTickBudget,
     ) -> ReferenceResult<SourceUpdate> {
         if self.accumulated.is_none() {
@@ -730,6 +748,9 @@ impl ReferenceSource for MassiveEquitySource {
                 self.cursor = cursor;
                 self.accumulated = accumulated;
             }
+        }
+        if self.cursor.is_none() && self.accumulated.is_none() {
+            self.sync_store.clear_staged_pages("massive-equity").await?;
         }
         if let Some(legacy_catalog) = self.accumulated.take() {
             self.sync_store
@@ -752,7 +773,7 @@ impl ReferenceSource for MassiveEquitySource {
                         MASSIVE_PAGE_TIMEOUT,
                         connections
                             .massive_rest
-                            .get(key)
+                            .get_shared(key)
                             .map_err(|error| ReferenceError::Provider(error.to_string()))?
                             .fetch_instruments_page(cursor.as_deref(), record_limit),
                     )
@@ -794,12 +815,19 @@ impl ReferenceSource for MassiveEquitySource {
                 break;
             }
         }
-        let mut facts_persisted = false;
+        let mut staged_changes = None;
         let result_catalog = if complete {
             self.cursor = None;
             if self.sync_store.supports_normalized_promotion() {
-                records_changed = Some(self.sync_store.promote_staged("massive-equity").await?);
-                facts_persisted = true;
+                records_changed = Some(
+                    self.sync_store
+                        .staged_change_count("massive-equity")
+                        .await?,
+                );
+                staged_changes = Some(SourceChanges {
+                    completed_scans: BTreeSet::from([ReferenceSourceId::new("massive-equity")?]),
+                    removed_scans: BTreeSet::new(),
+                });
                 ProviderCatalog::default()
             } else {
                 let catalog = self
@@ -835,7 +863,7 @@ impl ReferenceSource for MassiveEquitySource {
             pages_total: complete.then_some(pages_done),
             records_seen: Some(records_seen),
             records_changed,
-            facts_persisted,
+            staged_changes,
             work_item_id: Some("massive-equity:catalog".to_owned()),
             scope_id: Some("massive-equity".to_owned()),
             scope_kind: Some("provider_catalog".to_owned()),
@@ -863,6 +891,7 @@ pub(super) fn massive_provider_catalog(
         )));
     }
     let mut catalog = ProviderCatalog::default();
+    append_massive_venues(&mut catalog, facts.venues)?;
     for value in facts.instruments {
         append_massive_instrument(&mut catalog, value)?;
     }
@@ -893,6 +922,93 @@ pub(super) fn massive_provider_catalog(
         .dedup_by(|left, right| left.market_id == right.market_id);
     catalog.validate()?;
     Ok(catalog)
+}
+
+fn append_massive_venues(
+    catalog: &mut ProviderCatalog,
+    venues: Vec<kairos_conflux::ExternalVenue>,
+) -> ReferenceResult<()> {
+    use kairos_conflux::ExternalVenueKind;
+
+    use crate::domain::{Venue, VenueIdentifierKind, VenueIdentifierMapping, VenueKind, VenueRole};
+
+    for value in venues {
+        let Some(mic) = value
+            .mic
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        else {
+            // A provider identifier alone is not a canonical identity. Keep
+            // such rows outside the catalog until the source supplies a MIC.
+            continue;
+        };
+        let mic_value = kairos_primitives::reference::Mic::new(mic)?;
+        let venue_id = kairos_primitives::reference::VenueId::new(format!(
+            "venue:{}",
+            mic.to_ascii_lowercase()
+        ))?;
+        let (venue_kind, roles) = match value.kind {
+            ExternalVenueKind::Exchange => (
+                VenueKind::RegulatedExchange,
+                [VenueRole::Execution].into_iter().collect(),
+            ),
+            ExternalVenueKind::TradeReportingFacility => (
+                VenueKind::TradeReportingFacility,
+                [VenueRole::Reporting].into_iter().collect(),
+            ),
+            ExternalVenueKind::Sip | ExternalVenueKind::Unknown => (
+                VenueKind::Unknown,
+                [VenueRole::Reporting].into_iter().collect(),
+            ),
+        };
+        let status: kairos_primitives::reference::ReferenceStatus =
+            if value.active { "active" } else { "inactive" }.into();
+        catalog.venues.push(Venue {
+            venue_id: venue_id.clone(),
+            name: value.name,
+            venue_kind,
+            roles,
+            mic: Some(mic_value),
+            operating_mic: value
+                .operating_mic
+                .map(kairos_primitives::reference::Mic::new)
+                .transpose()?,
+            parent_venue_id: None,
+            jurisdiction: Some(kairos_primitives::reference::JurisdictionCode::new("US")?),
+            status,
+        });
+        for (kind, identifier) in [
+            (
+                VenueIdentifierKind::Exchange,
+                Some(value.provider_identifier),
+            ),
+            (VenueIdentifierKind::Mic, Some(mic.to_owned())),
+        ] {
+            let Some(identifier) = identifier.filter(|value| !value.trim().is_empty()) else {
+                continue;
+            };
+            catalog
+                .venue_identifier_mappings
+                .push(VenueIdentifierMapping {
+                    source_id: kairos_primitives::reference::ReferenceSourceId::new(
+                        "massive-equity",
+                    )?,
+                    provider: kairos_primitives::market::Provider::new("massive")?,
+                    provider_product: "equity".into(),
+                    identifier_kind: kind,
+                    identifier,
+                    venue_id: venue_id.clone(),
+                    status,
+                });
+        }
+    }
+    catalog
+        .venues
+        .sort_by(|left, right| left.venue_id.cmp(&right.venue_id));
+    catalog
+        .venues
+        .dedup_by(|left, right| left.venue_id == right.venue_id);
+    Ok(())
 }
 
 fn append_massive_instrument(

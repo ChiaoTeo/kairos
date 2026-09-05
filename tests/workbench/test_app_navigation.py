@@ -463,7 +463,7 @@ def test_back_preview_is_reverted_when_input_no_longer_matches() -> None:
     preview, restored, context = asyncio.run(run())
     assert "选择返回层级" in preview
     assert "选择返回层级" not in restored
-    assert "查找可以交易的标的" in restored
+    assert "查找标的" in restored
     assert context == ("market",)
 
 

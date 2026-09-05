@@ -3,6 +3,7 @@ from __future__ import annotations
 from kairospy.strategy import (
     ImmediateAlgorithm,
     InstrumentId,
+    MarketId,
     Price,
     QuoteEvent,
     Strategy,
@@ -19,7 +20,7 @@ class BtcusdtQuoteStrategy(Strategy):
     def on_start(self, ctx: StrategyContext) -> None:
         ctx.state.set_int("quote_count", 0)
         market = ctx.reference.require_market(
-            symbol="BTCUSDT", exchange="binance", instrument_kind="spot"
+            MarketId("market:binance:spot:BTCUSDT")
         )
         ctx.market.subscribe_quotes(market.id)
 

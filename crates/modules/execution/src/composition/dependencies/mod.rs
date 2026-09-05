@@ -8,7 +8,7 @@ pub fn configure_execution_dependencies(
     application: &mut crate::application::ExecutionApplication,
     system: &mut kairos_conflux::ConfluxSystem,
     manifest: impl AsRef<std::path::Path>,
-    reference_snapshot: Option<kairos_reference_contract::ExecutionReferenceSnapshot>,
+    reference: Option<kairos_reference_contract::ReferenceCatalog>,
     backtest: bool,
     capacity: usize,
 ) -> Result<(), String> {
@@ -18,16 +18,16 @@ pub fn configure_execution_dependencies(
     };
 
     let manifest = manifest.as_ref();
-    let mut intent_planner = SocketExecutionIntentPlanner::from_manifest_with_reference_snapshot(
+    let mut intent_planner = SocketExecutionIntentPlanner::from_manifest_with_reference_catalog(
         system,
         manifest,
-        reference_snapshot.clone(),
-    )?;
-    let mut order_admission = SocketExecutionOrderAdmission::from_manifest_with_reference_snapshot(
-        system,
-        manifest,
-        reference_snapshot,
-    )?;
+        reference.clone(),
+    )
+    .map_err(|error| error.to_string())?;
+    let mut order_admission = SocketExecutionOrderAdmission::from_manifest_with_reference_catalog(
+        system, manifest, reference,
+    )
+    .map_err(|error| error.to_string())?;
     if backtest {
         intent_planner = intent_planner.without_market_snapshot();
         order_admission = order_admission
@@ -36,13 +36,18 @@ pub fn configure_execution_dependencies(
             .allow_backtest_without_reference_state(true)
             .allow_backtest_without_account_state(true);
     }
-    let risk_reservations = order_admission.risk_reservations_adapter()?;
-    application.attach_intent_planner(QueuedExecutionIntentPlanner::start(
-        intent_planner,
-        capacity,
-    )?)?;
+    let risk_reservations = order_admission
+        .risk_reservations_adapter()
+        .map_err(|error| error.to_string())?;
+    application
+        .attach_intent_planner(
+            QueuedExecutionIntentPlanner::start(intent_planner, capacity)
+                .map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
     application.attach_order_admission(ExecutionOrderAdmissionService::live(
-        QueuedExecutionOrderAdmission::start(order_admission, capacity)?,
+        QueuedExecutionOrderAdmission::start(order_admission, capacity)
+            .map_err(|error| error.to_string())?,
     ));
     application.attach_risk_reservations(
         crate::services::risk::QueuedExecutionRiskReservations::start(risk_reservations, capacity)?,

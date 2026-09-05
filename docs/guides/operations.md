@@ -439,7 +439,7 @@ uv run kairospy reference catalog --workspace my-project --format json
 需要组合多类 Reference 记录时，应使用 snapshot，使所有读取固定在同一 SQLite 只读事务：
 
 ```python
-with ctx.reference.snapshot() as ref:
+with ctx.reference.read_session() as ref:
     market = ref.require_market(market_id)
     instrument = ref.require_instrument(market.instrument.id)
     if market.listing_id is None:

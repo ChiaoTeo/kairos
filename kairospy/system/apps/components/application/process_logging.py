@@ -9,13 +9,72 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import sys
 import uuid
 import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+
+
+@dataclass(slots=True)
+class LoggedProcess:
+    """Own one component process and the detached sink draining its output."""
+
+    child: subprocess.Popen[bytes]
+    sink: subprocess.Popen[bytes]
+
+    @property
+    def pid(self) -> int:
+        return self.child.pid
+
+    def poll(self) -> int | None:
+        return self.child.poll()
+
+    def reap(self, timeout: float = 5.0) -> None:
+        """Reap an exited child and wait for its pipe-driven sink to finish."""
+
+        self.child.wait(timeout=timeout)
+        self._finish_sink(timeout)
+
+    def terminate(self, timeout: float = 5.0) -> None:
+        """Stop the owned process session, then close and reap its log sink."""
+
+        if self.child.poll() is None:
+            _signal_process_session(self.child, signal.SIGTERM)
+            try:
+                self.child.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                _signal_process_session(self.child, signal.SIGKILL)
+                self.child.wait(timeout=timeout)
+        self._finish_sink(timeout)
+
+    def _finish_sink(self, timeout: float) -> None:
+        try:
+            self.sink.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _signal_process_session(self.sink, signal.SIGTERM)
+            try:
+                self.sink.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                _signal_process_session(self.sink, signal.SIGKILL)
+                self.sink.wait(timeout=timeout)
+
+
+def _signal_process_session(
+    process: subprocess.Popen[bytes], requested_signal: signal.Signals
+) -> None:
+    try:
+        process_group = os.getpgid(process.pid)
+        if process_group == process.pid:
+            os.killpg(process_group, requested_signal)
+        else:
+            process.send_signal(requested_signal)
+    except ProcessLookupError:
+        pass
 
 
 def utc_timestamp() -> str:
@@ -111,7 +170,7 @@ def start_logged_process(
     log_path: Path,
     cwd: str,
     environment: Mapping[str, str],
-) -> subprocess.Popen[bytes]:
+) -> LoggedProcess:
     """Start a detached child whose combined output becomes rotating JSONL."""
     log_path.parent.mkdir(parents=True, exist_ok=True)
     run_id = str(uuid.uuid4())
@@ -134,6 +193,8 @@ def start_logged_process(
         close_fds=True,
     )
     if sink.stdin is None:  # pragma: no cover - subprocess contract guard
+        sink.terminate()
+        sink.wait(timeout=5)
         raise RuntimeError("process log sink did not expose stdin")
     child_environment = {
         **environment,
@@ -168,9 +229,11 @@ def start_logged_process(
     except BaseException:
         sink.stdin.close()
         sink.terminate()
+        try:
+            sink.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            sink.kill()
+            sink.wait(timeout=5)
         raise
     sink.stdin.close()
-    # Retain the sink handle for the lifetime of the child Popen object. The
-    # sink exits naturally when the child closes its inherited pipe.
-    process._kairos_log_sink = sink  # type: ignore[attr-defined]
-    return process
+    return LoggedProcess(process, sink)

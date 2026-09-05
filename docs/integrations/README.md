@@ -6,6 +6,7 @@
 ## Coverage
 
 - [Capability matrix](capability-matrix.md)
+- [Reference catalog sources and coverage](reference-catalog-coverage.md)
 - [Execution venue certification](execution-venue-certification.md)
 - [Execution transaction certification records](execution-certifications/README.md)
 - [Binance public market-stream certification](binance-market-stream-certification.md)

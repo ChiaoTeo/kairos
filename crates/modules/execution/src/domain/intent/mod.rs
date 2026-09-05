@@ -8,11 +8,13 @@ use serde::{Deserialize, Serialize};
 use super::{ExecutionOrderStatus, OrderSide};
 
 mod entity;
+mod error;
 mod leg;
 mod planning;
 mod policy;
 
 pub use entity::*;
+pub use error::*;
 pub use leg::*;
 pub use planning::*;
 pub use policy::*;

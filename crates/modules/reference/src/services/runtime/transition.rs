@@ -101,20 +101,31 @@ impl SourceRuntimeRegistry {
         health.status = SourceRuntimePhase::Promoting;
         health.progress = progress;
         health.work_item = work_item;
-        health.last_success_unix_nanos = Some(crate::services::time::unix_nanos());
-        health.retry_after_unix_nanos = None;
-        health.retry_backoff_seconds = None;
-        health.consecutive_failures = 0;
-        health.stale = false;
-        health.last_error = None;
-        self.known_last_good.insert(source_id.to_owned());
-        self.retry_after.remove(source_id);
     }
 
-    pub(crate) fn mark_promotions_committed(&mut self) {
-        for health in self.health.values_mut() {
-            if health.status == SourceRuntimePhase::Promoting {
+    pub(crate) fn mark_sources_committed(
+        &mut self,
+        committed: &crate::services::sources::SourceChanges,
+        pending: &crate::services::sources::SourceChanges,
+    ) {
+        for (source_id, health) in &mut self.health {
+            if matches!(
+                health.status,
+                SourceRuntimePhase::Promoting
+                    | SourceRuntimePhase::Degraded
+                    | SourceRuntimePhase::Unavailable
+            ) && committed.affects_source(source_id)
+                && !pending.affects_source(source_id)
+            {
                 health.status = SourceRuntimePhase::Ready;
+                health.last_success_unix_nanos = Some(crate::services::time::unix_nanos());
+                health.retry_after_unix_nanos = None;
+                health.retry_backoff_seconds = None;
+                health.consecutive_failures = 0;
+                health.stale = false;
+                health.last_error = None;
+                self.known_last_good.insert(source_id.clone());
+                self.retry_after.remove(source_id);
             }
         }
     }

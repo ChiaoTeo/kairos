@@ -43,7 +43,9 @@ class Routes:
 
     MARKET = route(Section.MARKET)
     MARKET_PROVIDERS = route(Section.MARKET, "providers")
+    MARKET_INTENT = route(Section.MARKET, "intent")
     MARKET_MISSING = route(Section.MARKET, "missing")
+    MARKET_NOT_FOUND = route(Section.MARKET, "not-found")
     MARKET_CATALOG_EXCHANGE = route(Section.MARKET, "catalog-exchange")
     MARKET_CATALOG_INSTRUMENT = route(Section.MARKET, "catalog-instrument")
     MARKET_CATALOG_SETUP = route(Section.MARKET, "catalog-setup")

@@ -66,7 +66,7 @@ pub(crate) fn log_source_scan_completed(
         records_changed = update.records_changed,
         cursor_present = update.cursor_present,
         complete = true,
-        facts_persisted = update.facts_persisted,
+        facts_persisted = update.staged_changes.is_some(),
         has_last_known_good,
         page_count = update.page_count,
         "normalized provider facts are ready for atomic promotion"
@@ -90,7 +90,7 @@ pub(crate) fn log_source_candidate_completed(source_id: &str, update: &SourceUpd
             .records_seen
             .or_else(|| Some(update.catalog.record_count() as u64)),
         records_changed = update.records_changed,
-        facts_persisted = update.facts_persisted,
+        facts_persisted = update.staged_changes.is_some(),
         "complete provider candidate is ready for reference reconciliation"
     );
 }
@@ -121,7 +121,7 @@ pub(crate) fn log_source_scan_progress(
         records_changed = update.records_changed,
         cursor_present = update.cursor_present,
         complete = false,
-        facts_persisted = update.facts_persisted,
+        facts_persisted = update.staged_changes.is_some(),
         has_last_known_good,
         page_count = update.page_count,
         "normalized provider scan will resume from its durable cursor"

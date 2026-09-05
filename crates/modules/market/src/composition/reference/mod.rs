@@ -20,28 +20,24 @@ pub fn cli_reference_universe(
     instrument_kind: kairos_primitives::reference::InstrumentKind,
     limit: u64,
 ) -> Result<CliReferenceUniverseResult, Box<dyn std::error::Error>> {
-    use kairos_primitives::reference::{InstrumentKind, ReferenceStatus};
-    use kairos_reference_contract::{
-        MarketCatalogQuery, MarketReferenceSnapshot, ReferenceCatalog,
-    };
+    use kairos_primitives::reference::InstrumentKind;
+    use kairos_reference_contract::{ReferenceCatalog, VenueMarketSearchQuery};
 
     let database = workspace.child(&["state", "reference", "reference.sqlite"])?;
     let reader = ReferenceCatalog::open(&database)?;
-    let catalog_page = reader.market_catalog(&MarketCatalogQuery {
+    let session = reader.read_session()?;
+    let catalog_page = session.search_venue_markets(&VenueMarketSearchQuery {
         instrument_kind: Some(instrument_kind),
-        statuses: vec![ReferenceStatus::Active, ReferenceStatus::Trading],
-        limit,
-        ..MarketCatalogQuery::default()
+        active_only: true,
+        page: kairos_reference_contract::ReferencePage {
+            limit: Some(limit),
+            offset: 0,
+        },
+        ..Default::default()
     })?;
-    let snapshot = MarketReferenceSnapshot {
-        generation: catalog_page.watermark.generation,
-        event_sequence: catalog_page.watermark.event_sequence,
-        instruments: catalog_page.instruments.into_values().collect(),
-        markets: catalog_page.markets,
-        ..MarketReferenceSnapshot::default()
-    };
     let config = super::MarketCompositionConfig::load(workspace)?;
-    let update = resolve_reference_market_universe(&snapshot, &config.providers)?;
+    let reference_markets = catalog_page.markets.len();
+    let update = resolve_reference_market_universe(&catalog_page, &config.providers)?;
     let massive_option_routes = update
         .markets
         .iter()
@@ -63,7 +59,7 @@ pub fn cli_reference_universe(
     Ok(CliReferenceUniverseResult {
         generation: update.generation,
         event_sequence: update.event_sequence,
-        reference_markets: snapshot.markets.len(),
+        reference_markets,
         resolved_markets: update.markets.len(),
         massive_option_routes,
         sample,

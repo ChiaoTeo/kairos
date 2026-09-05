@@ -19,10 +19,10 @@ pub(crate) fn build_market_universe_resolver(
         .iter()
         .filter(|(_, binding)| binding.enabled())
         .map(|(_, binding)| {
-            let (exchange_id, instrument_kinds) = match binding {
-                MarketProviderBinding::BinanceSpot { .. } => (Some("exchange:binance"), vec![Spot]),
+            let (execution_venue_id, instrument_kinds) = match binding {
+                MarketProviderBinding::BinanceSpot { .. } => (Some("venue:binance"), vec![Spot]),
                 MarketProviderBinding::BinanceDerivatives { product, .. } => (
-                    Some("exchange:binance"),
+                    Some("venue:binance"),
                     match product {
                         BinanceDerivativeProduct::Options => vec![Option],
                         BinanceDerivativeProduct::UsdMFutures
@@ -32,7 +32,7 @@ pub(crate) fn build_market_universe_resolver(
                 MarketProviderBinding::Okx {
                     instrument_type, ..
                 } => (
-                    Some("exchange:okx"),
+                    Some("venue:okx"),
                     vec![match instrument_type {
                         OkxInstrumentType::Spot => Spot,
                         OkxInstrumentType::Swap => Perpetual,
@@ -41,7 +41,7 @@ pub(crate) fn build_market_universe_resolver(
                     }],
                 ),
                 MarketProviderBinding::Hyperliquid { market_type, .. } => (
-                    Some("exchange:hyperliquid"),
+                    Some("venue:hyperliquid"),
                     vec![match market_type {
                         HyperliquidMarketType::Spot => Spot,
                         HyperliquidMarketType::Perpetual => Perpetual,
@@ -67,8 +67,8 @@ pub(crate) fn build_market_universe_resolver(
                     .expect("code-owned provider identity is valid"),
                 provider_segment: crate::domain::market::ProviderSegmentCode::new(provider_segment)
                     .expect("code-owned provider segment is valid"),
-                exchange_id: exchange_id
-                    .map(kairos_primitives::reference::ExchangeId::new)
+                execution_venue_id: execution_venue_id
+                    .map(kairos_primitives::reference::VenueId::new)
                     .transpose()
                     .expect("code-owned exchange identity is valid"),
                 instrument_kinds,
@@ -80,10 +80,10 @@ pub(crate) fn build_market_universe_resolver(
 }
 
 pub fn resolve_market_universe(
-    snapshot: &kairos_reference_contract::MarketReferenceSnapshot,
+    catalog: &kairos_reference_contract::MarketSearchResponse,
     sources: &BTreeMap<String, MarketProviderBinding>,
 ) -> Result<ReconcileMarketUniverse, String> {
-    build_market_universe_resolver(sources).resolve(snapshot)
+    build_market_universe_resolver(sources).resolve(catalog)
 }
 
 #[cfg(test)]
@@ -95,30 +95,26 @@ mod tests {
 
     #[test]
     fn maps_reference_view_to_market_owned_universe() {
-        let mut snapshot = kairos_reference_contract::MarketReferenceSnapshot {
-            generation: 7.into(),
-            event_sequence: 11.into(),
+        let mut snapshot = kairos_reference_contract::MarketSearchResponse {
+            evidence: evidence(),
+            ..Default::default()
+        };
+        let instrument = kairos_reference_contract::Instrument {
+            instrument_id: kairos_primitives::reference::InstrumentId::new("instrument:btc")
+                .unwrap(),
+            instrument_type: kairos_primitives::reference::InstrumentKind::Spot,
+            status: "active".into(),
             ..Default::default()
         };
         snapshot
             .instruments
-            .push(kairos_reference_contract::Instrument {
-                instrument_id: kairos_primitives::reference::InstrumentId::new("instrument:btc")
-                    .unwrap(),
-                instrument_type: kairos_primitives::reference::InstrumentKind::Spot,
-                status: "active".into(),
-                ..Default::default()
-            });
-        snapshot.markets.push(kairos_reference_contract::Market {
-            market_id: kairos_primitives::reference::MarketId::new("market:btc").unwrap(),
-            instrument_id: kairos_primitives::reference::InstrumentId::new("instrument:btc")
-                .unwrap(),
-            exchange_id: kairos_primitives::reference::ExchangeId::new("exchange:binance").unwrap(),
-            instrument_kind: kairos_primitives::reference::InstrumentKind::Spot,
-            venue_symbol: Some(kairos_primitives::reference::Symbol::new("BTCUSDT").unwrap()),
-            status: "active".into(),
-            ..Default::default()
-        });
+            .insert(instrument.instrument_id.clone(), instrument);
+        snapshot.markets.push(venue_market(
+            "market:btc",
+            "instrument:btc",
+            "venue:binance",
+            "BTCUSDT",
+        ));
         let sources = BTreeMap::from([(
             "binance-spot-rest".into(),
             MarketProviderBinding::BinanceSpot {
@@ -156,44 +152,36 @@ mod tests {
     #[test]
     fn excludes_market_without_a_configured_or_builtin_venue_adapter() {
         let mut snapshot = fixture();
-        snapshot.markets[0].exchange_id =
-            kairos_primitives::reference::ExchangeId::new("exchange:curated").unwrap();
+        snapshot.markets[0].execution_venue_id =
+            kairos_primitives::reference::VenueId::new("venue:curated").unwrap();
         let update = resolve_market_universe(&snapshot, &BTreeMap::new()).unwrap();
         assert!(update.markets.is_empty());
     }
 
     #[test]
     fn equity_market_can_be_resolved_for_multiple_provider_sources() {
-        let mut snapshot = kairos_reference_contract::MarketReferenceSnapshot {
-            generation: 7.into(),
-            event_sequence: 11.into(),
+        let mut snapshot = kairos_reference_contract::MarketSearchResponse {
+            evidence: evidence(),
             ..Default::default()
         };
-        snapshot
-            .instruments
-            .push(kairos_reference_contract::Instrument {
-                instrument_id: kairos_primitives::reference::InstrumentId::new(
-                    "instrument:equity:US:AAPL:common",
-                )
-                .unwrap(),
-                instrument_type: kairos_primitives::reference::InstrumentKind::Equity,
-                status: "active".into(),
-                ..Default::default()
-            });
-        snapshot.markets.push(kairos_reference_contract::Market {
-            market_id: kairos_primitives::reference::MarketId::new("market:nasdaq:equity:AAPL:USD")
-                .unwrap(),
+        let instrument = kairos_reference_contract::Instrument {
             instrument_id: kairos_primitives::reference::InstrumentId::new(
                 "instrument:equity:US:AAPL:common",
             )
             .unwrap(),
-            exchange_id: kairos_primitives::reference::ExchangeId::new("exchange:nasdaq").unwrap(),
-            instrument_kind: kairos_primitives::reference::InstrumentKind::Equity,
-            asset_type: Some(kairos_primitives::reference::AssetClass::Equity),
-            venue_symbol: Some(kairos_primitives::reference::Symbol::new("AAPL").unwrap()),
+            instrument_type: kairos_primitives::reference::InstrumentKind::Equity,
             status: "active".into(),
             ..Default::default()
-        });
+        };
+        snapshot
+            .instruments
+            .insert(instrument.instrument_id.clone(), instrument);
+        snapshot.markets.push(venue_market(
+            "market:nasdaq:equity:AAPL:USD",
+            "instrument:equity:US:AAPL:common",
+            "venue:xnas",
+            "AAPL",
+        ));
         let sources = BTreeMap::from([
             (
                 "massive-equity".into(),
@@ -236,61 +224,44 @@ mod tests {
 
     #[test]
     fn explicit_exchange_option_market_projects_to_massive_options_route() {
-        let mut snapshot = kairos_reference_contract::MarketReferenceSnapshot {
-            generation: 7.into(),
-            event_sequence: 11.into(),
+        let mut snapshot = kairos_reference_contract::MarketSearchResponse {
+            evidence: evidence(),
             ..Default::default()
         };
-        snapshot
-            .instruments
-            .push(kairos_reference_contract::Instrument {
-                instrument_id: kairos_primitives::reference::InstrumentId::new(
-                    "instrument:option:SPY:20270115:500:C",
-                )
-                .unwrap(),
-                instrument_type: kairos_primitives::reference::InstrumentKind::Option,
-                underlying_instrument_id: Some(
-                    kairos_primitives::reference::InstrumentId::new(
-                        "instrument:equity:US:SPY:common",
-                    )
-                    .unwrap(),
-                ),
-                expiry_unix_nanos: Some(kairos_primitives::time::UnixNanos::new(
-                    1_800_144_000_000_000_000,
-                )),
-                strike: Some(kairos_primitives::decimal::Price::new(500, 0).unwrap()),
-                option_right: Some("call".into()),
-                status: "active".into(),
-                ..Default::default()
-            });
-        snapshot.markets.push(kairos_reference_contract::Market {
-            market_id: kairos_primitives::reference::MarketId::new(
-                "market:cboe-bzx-options:option:O:SPY260821C00500000",
-            )
-            .unwrap(),
+        let instrument = kairos_reference_contract::Instrument {
             instrument_id: kairos_primitives::reference::InstrumentId::new(
                 "instrument:option:SPY:20270115:500:C",
             )
             .unwrap(),
-            listing_id: Some(
-                kairos_primitives::reference::ListingId::new(
-                    "listing:cboe-bzx-options:option:SPY-20270115-500-C",
-                )
-                .unwrap(),
-            ),
-            exchange_id: kairos_primitives::reference::ExchangeId::new("exchange:cboe-bzx-options")
-                .unwrap(),
-            instrument_kind: kairos_primitives::reference::InstrumentKind::Option,
+            instrument_type: kairos_primitives::reference::InstrumentKind::Option,
             underlying_instrument_id: Some(
                 kairos_primitives::reference::InstrumentId::new("instrument:equity:US:SPY:common")
                     .unwrap(),
             ),
-            venue_symbol: Some(
-                kairos_primitives::reference::Symbol::new("O:SPY260821C00500000").unwrap(),
-            ),
+            expiry_unix_nanos: Some(kairos_primitives::time::UnixNanos::new(
+                1_800_144_000_000_000_000,
+            )),
+            strike: Some(kairos_primitives::decimal::Price::new(500, 0).unwrap()),
+            option_right: Some("call".into()),
             status: "active".into(),
             ..Default::default()
-        });
+        };
+        snapshot
+            .instruments
+            .insert(instrument.instrument_id.clone(), instrument);
+        let mut option_market = venue_market(
+            "market:cboe-bzx-options:option:O:SPY260821C00500000",
+            "instrument:option:SPY:20270115:500:C",
+            "venue:cboe-bzx-options",
+            "O:SPY260821C00500000",
+        );
+        option_market.origin_listing_id = Some(
+            kairos_primitives::reference::ListingId::new(
+                "listing:cboe-bzx-options:option:SPY-20270115-500-C",
+            )
+            .unwrap(),
+        );
+        snapshot.markets.push(option_market);
         let sources = BTreeMap::from([(
             "massive-options".into(),
             MarketProviderBinding::Massive {
@@ -335,27 +306,62 @@ mod tests {
         );
     }
 
-    fn fixture() -> kairos_reference_contract::MarketReferenceSnapshot {
-        let mut snapshot = kairos_reference_contract::MarketReferenceSnapshot::default();
-        snapshot
-            .instruments
-            .push(kairos_reference_contract::Instrument {
-                instrument_id: kairos_primitives::reference::InstrumentId::new("instrument:btc")
-                    .unwrap(),
-                instrument_type: kairos_primitives::reference::InstrumentKind::Spot,
-                status: "active".into(),
-                ..Default::default()
-            });
-        snapshot.markets.push(kairos_reference_contract::Market {
-            market_id: kairos_primitives::reference::MarketId::new("market:btc").unwrap(),
+    fn fixture() -> kairos_reference_contract::MarketSearchResponse {
+        let mut snapshot = kairos_reference_contract::MarketSearchResponse::default();
+        snapshot.evidence = evidence();
+        let instrument = kairos_reference_contract::Instrument {
             instrument_id: kairos_primitives::reference::InstrumentId::new("instrument:btc")
                 .unwrap(),
-            exchange_id: kairos_primitives::reference::ExchangeId::new("exchange:binance").unwrap(),
-            instrument_kind: kairos_primitives::reference::InstrumentKind::Spot,
-            venue_symbol: Some(kairos_primitives::reference::Symbol::new("BTCUSDT").unwrap()),
+            instrument_type: kairos_primitives::reference::InstrumentKind::Spot,
             status: "active".into(),
             ..Default::default()
-        });
+        };
         snapshot
+            .instruments
+            .insert(instrument.instrument_id.clone(), instrument);
+        snapshot.markets.push(venue_market(
+            "market:btc",
+            "instrument:btc",
+            "venue:binance",
+            "BTCUSDT",
+        ));
+        snapshot
+    }
+
+    fn evidence() -> kairos_reference_contract::ReferenceQueryEvidence {
+        kairos_reference_contract::ReferenceQueryEvidence {
+            watermark: kairos_reference_contract::ReferenceWatermark {
+                generation: 7.into(),
+                event_sequence: 11.into(),
+                ..Default::default()
+            },
+            conclusion: kairos_reference_contract::ReferenceKnowledgeConclusion::Found,
+            ..Default::default()
+        }
+    }
+
+    fn venue_market(
+        market_id: &str,
+        instrument_id: &str,
+        execution_venue_id: &str,
+        venue_symbol: &str,
+    ) -> kairos_reference_contract::VenueMarket {
+        kairos_reference_contract::VenueMarket {
+            market_id: kairos_primitives::reference::MarketId::new(market_id).unwrap(),
+            instrument_id: kairos_primitives::reference::InstrumentId::new(instrument_id).unwrap(),
+            execution_venue_id: kairos_primitives::reference::VenueId::new(execution_venue_id)
+                .unwrap(),
+            origin_listing_id: None,
+            market_segment_id: None,
+            venue_symbol: Some(kairos_primitives::reference::Symbol::new(venue_symbol).unwrap()),
+            trading_calendar_id: None,
+            trading_session_ids: Vec::new(),
+            base_asset_id: None,
+            quote_asset_id: None,
+            status: kairos_primitives::reference::ReferenceStatus::Active,
+            trading_rules: kairos_reference_contract::TradingRules::default(),
+            effective_from_unix_nanos: 0.into(),
+            effective_to_unix_nanos: None,
+        }
     }
 }

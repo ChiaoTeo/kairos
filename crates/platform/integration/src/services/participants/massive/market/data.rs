@@ -42,6 +42,15 @@ pub(crate) fn normalize_historical_quotes(
     rows.into_iter()
         .map(|row| {
             Ok(MarketQuote {
+                venue: MarketVenueEvidence {
+                    bid_exchange: row.bid_exchange,
+                    ask_exchange: row.ask_exchange,
+                    tape: row.tape,
+                    participant_timestamp_unix_nanos: row
+                        .participant_timestamp_unix_nanos
+                        .map(Into::into),
+                    ..Default::default()
+                },
                 symbol: ParticipantSymbol::new(window.symbol.as_str())
                     .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))?,
                 bid_price: parse_optional::<Price>(row.bid_price)?,
@@ -577,6 +586,37 @@ mod tests {
 
     use super::normalize;
     use crate::MarketEventKind;
+
+    #[test]
+    fn historical_quote_normalization_preserves_optional_venue_evidence() {
+        for known in [false, true] {
+            let row = crate::services::participants::massive::rest::MassiveHistoricalQuote {
+                sip_timestamp_unix_nanos: 7,
+                participant_timestamp_unix_nanos: Some(6),
+                bid_price: Some("100".into()),
+                bid_size: None,
+                bid_exchange: known.then(|| "19".into()),
+                ask_price: Some("101".into()),
+                ask_size: None,
+                ask_exchange: known.then(|| "11".into()),
+                tape: Some(3),
+                sequence_number: None,
+            };
+            let window = crate::HistoricalWindow {
+                symbol: kairos_primitives::integration::ParticipantSymbol::new("AAPL").unwrap(),
+                start_time_unix_nanos: 1.into(),
+                end_time_unix_nanos: 10.into(),
+            };
+            let quote = super::normalize_historical_quotes(vec![row], &window)
+                .unwrap()
+                .remove(0);
+            assert_eq!(quote.venue.bid_exchange.as_deref(), known.then_some("19"));
+            assert_eq!(quote.venue.ask_exchange.as_deref(), known.then_some("11"));
+            assert_eq!(quote.venue.tape, Some(3));
+            assert_eq!(quote.venue.participant_timestamp_unix_nanos, Some(6.into()));
+            assert!(quote.venue.trade_exchange.is_none());
+        }
+    }
 
     #[test]
     fn official_numeric_quote_fields_are_preserved() {

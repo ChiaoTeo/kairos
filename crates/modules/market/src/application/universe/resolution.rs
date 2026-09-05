@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use kairos_primitives::market::Provider;
-use kairos_primitives::reference::{ExchangeId, InstrumentKind, ReferenceStatus};
+use kairos_primitives::reference::{InstrumentKind, ReferenceStatus, VenueId};
 
 use super::ReconcileMarketUniverse;
 use crate::{ObservationKind, ProviderRouteBinding, ResolvedMarket};
@@ -11,7 +11,7 @@ use crate::{ObservationKind, ProviderRouteBinding, ResolvedMarket};
 pub(crate) struct MarketProviderCapability {
     pub(crate) provider: Provider,
     pub(crate) provider_segment: crate::domain::market::ProviderSegmentCode,
-    pub(crate) exchange_id: Option<ExchangeId>,
+    pub(crate) execution_venue_id: Option<VenueId>,
     pub(crate) instrument_kinds: Vec<InstrumentKind>,
     pub(crate) observation_kinds: Vec<ObservationKind>,
 }
@@ -29,31 +29,27 @@ impl MarketUniverseResolver {
 
     pub(crate) fn resolve(
         &self,
-        snapshot: &kairos_reference_contract::MarketReferenceSnapshot,
+        catalog: &kairos_reference_contract::MarketSearchResponse,
     ) -> Result<ReconcileMarketUniverse, String> {
-        let instruments = snapshot
-            .instruments
-            .iter()
-            .map(|instrument| (instrument.instrument_id.as_str(), instrument))
-            .collect::<BTreeMap<_, _>>();
+        let instruments = &catalog.instruments;
         let mut markets = Vec::new();
-        for market in snapshot
+        for market in catalog
             .markets
             .iter()
             .filter(|market| is_active(&market.status))
         {
-            let instrument = instruments
-                .get(market.instrument_id.as_str())
-                .ok_or_else(|| {
-                    format!(
-                        "Reference market {} has no instrument {}",
-                        market.market_id, market.instrument_id
-                    )
-                })?;
+            let instrument = instruments.get(&market.instrument_id).ok_or_else(|| {
+                format!(
+                    "Reference market {} has no instrument {}",
+                    market.market_id, market.instrument_id
+                )
+            })?;
             let candidates = self
                 .providers
                 .iter()
-                .filter(|source| source.supports(&market.exchange_id, market.instrument_kind))
+                .filter(|source| {
+                    source.supports(&market.execution_venue_id, instrument.instrument_type)
+                })
                 .map(|source| {
                     (
                         source.provider.as_str(),
@@ -76,12 +72,12 @@ impl MarketUniverseResolver {
                     market.market_id.clone(),
                     market.instrument_id.clone(),
                     instrument.instrument_type,
-                    market.exchange_id.clone(),
+                    market.execution_venue_id.clone(),
                     route,
                 )
                 .map_err(|error| error.to_string())?;
-                descriptor.asset_type = market.asset_type;
-                descriptor.underlying_instrument_id = market.underlying_instrument_id.clone();
+                descriptor.asset_type = None;
+                descriptor.underlying_instrument_id = instrument.underlying_instrument_id.clone();
                 descriptor.expiry_unix_nanos = instrument.expiry_unix_nanos;
                 descriptor.strike = instrument.strike;
                 descriptor.option_right = instrument.option_right.clone();
@@ -90,8 +86,8 @@ impl MarketUniverseResolver {
         }
 
         Ok(ReconcileMarketUniverse {
-            generation: snapshot.generation,
-            event_sequence: snapshot.event_sequence,
+            generation: catalog.evidence.watermark.generation,
+            event_sequence: catalog.evidence.watermark.event_sequence,
             markets: merge_markets(markets)?,
         })
     }
@@ -101,28 +97,17 @@ impl MarketUniverseResolver {
     /// method does not create or update a Market-side Reference catalog.
     pub(crate) fn resolve_catalog_page(
         &self,
-        page: kairos_reference_contract::ReferenceMarketCatalogPage,
+        page: kairos_reference_contract::MarketSearchResponse,
     ) -> Result<Vec<ResolvedMarket>, String> {
-        let snapshot = kairos_reference_contract::MarketReferenceSnapshot {
-            generation: page.watermark.generation,
-            event_sequence: page.watermark.event_sequence,
-            instruments: page.instruments.into_values().collect(),
-            markets: page.markets,
-            ..Default::default()
-        };
-        self.resolve(&snapshot).map(|resolved| resolved.markets)
+        self.resolve(&page).map(|resolved| resolved.markets)
     }
 }
 
 impl MarketProviderCapability {
-    fn supports(
-        &self,
-        exchange_id: &kairos_primitives::reference::ExchangeId,
-        instrument_kind: InstrumentKind,
-    ) -> bool {
-        self.exchange_id
+    fn supports(&self, execution_venue_id: &VenueId, instrument_kind: InstrumentKind) -> bool {
+        self.execution_venue_id
             .as_ref()
-            .is_none_or(|venue| venue == exchange_id)
+            .is_none_or(|venue| venue == execution_venue_id)
             && self.instrument_kinds.contains(&instrument_kind)
     }
 }

@@ -82,9 +82,12 @@ impl OrderCommitment {
         remaining_quantity: Quantity,
         basis: CommitmentBasis,
         updated_at_unix_nanos: UnixNanos,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, OrderError> {
         if amount <= Money::ZERO || remaining_quantity <= Quantity::ZERO {
-            return Err("order commitment amount and quantity must be positive".into());
+            return Err(OrderError::CommitmentNotPositive {
+                amount,
+                remaining_quantity,
+            });
         }
         Ok(Self {
             order_id,

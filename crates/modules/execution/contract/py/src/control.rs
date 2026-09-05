@@ -1510,10 +1510,26 @@ impl NativeExecutionBacktestMarketRequest {
         let market_id = MarketId::new(market_id).map_err(value_error)?;
         let instrument_id = InstrumentId::new(instrument_id).map_err(value_error)?;
         let source_id = Provider::new(source_id).map_err(value_error)?;
-        let bid_price = bid_price.as_ref().map(price_input).transpose()?;
-        let bid_quantity = bid_quantity.as_ref().map(quantity_input).transpose()?;
-        let ask_price = ask_price.as_ref().map(price_input).transpose()?;
-        let ask_quantity = ask_quantity.as_ref().map(quantity_input).transpose()?;
+        let bid_price = bid_price
+            .as_ref()
+            .map(price_input)
+            .transpose()
+            .map_err(|error| value_error(format!("bid_price: {error}")))?;
+        let bid_quantity = bid_quantity
+            .as_ref()
+            .map(quantity_input)
+            .transpose()
+            .map_err(|error| value_error(format!("bid_quantity: {error}")))?;
+        let ask_price = ask_price
+            .as_ref()
+            .map(price_input)
+            .transpose()
+            .map_err(|error| value_error(format!("ask_price: {error}")))?;
+        let ask_quantity = ask_quantity
+            .as_ref()
+            .map(quantity_input)
+            .transpose()
+            .map_err(|error| value_error(format!("ask_quantity: {error}")))?;
         Ok(Self {
             inner: ExecutionBacktestMarketRequest {
                 event: ExecutionBacktestMarketObservation::Quote(ExecutionBacktestQuote {

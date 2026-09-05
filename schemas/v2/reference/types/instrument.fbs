@@ -17,4 +17,5 @@ table Instrument {
   share_class:string;
   primary_currency_asset_id:string;
   status:ReferenceLifecycleStatus = UNSPECIFIED;
+  settlement_asset_id:string;
 }

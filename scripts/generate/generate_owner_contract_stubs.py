@@ -151,7 +151,8 @@ RETURN_TYPES.update(
         ("risk", "RiskLiveEventView", "data"): "RiskDecisionEventPayload | RiskReservationEventPayload | RiskCircuitEventPayload | None",
         ("risk", "RiskLiveSubscription", "close"): "None",
         ("risk", "RiskLiveSubscription", "poll_visit"): "int",
-        ("reference", "ReferenceLiveEventView", "data"): "ReferenceExchange | ReferenceAsset | ReferenceInstrument | ReferenceListing | ReferenceMarket",
+        ("reference", "ReferenceLiveEventView", "data"): "ReferenceEventPayload",
+        ("reference", "ReferenceEvent", "data"): "ReferenceEventPayload",
         ("reference", "ReferenceLiveSubscription", "close"): "None",
         ("reference", "ReferenceLiveSubscription", "poll_visit"): "int",
         ("reference", "ReferenceExchange", "id"): "ExchangeIdRead",
@@ -447,6 +448,29 @@ for method_name, request_type in {
     PARAMETER_TYPES[("risk", "RiskControlClient", method_name, "request")] = request_type
 
 for method_name in (
+    "search_venues",
+    "search_venue_listings",
+    "search_venue_markets",
+    "provider_catalog_memberships",
+):
+    PARAMETER_TYPES[("reference", "ReferenceReadSession", method_name, "limit")] = "int"
+    PARAMETER_TYPES[("reference", "ReferenceReadSession", method_name, "offset")] = "int"
+for method_name in ("search_venues", "search_venue_listings", "search_venue_markets"):
+    PARAMETER_TYPES[("reference", "ReferenceReadSession", method_name, "query")] = "str | None"
+PARAMETER_TYPES.update(
+    {
+        ("reference", "ReferenceReadSession", "search_venues", "venue_kind"): "str | None",
+        ("reference", "ReferenceReadSession", "search_venues", "role"): "str | None",
+        ("reference", "ReferenceReadSession", "search_venue_listings", "listing_venue_id"): "str | None",
+        ("reference", "ReferenceReadSession", "search_venue_markets", "execution_venue_id"): "str | None",
+        ("reference", "ReferenceReadSession", "search_venue_markets", "origin_listing_id"): "str | None",
+        ("reference", "ReferenceReadSession", "search_venue_markets", "instrument_kind"): "InstrumentKind | None",
+        ("reference", "ReferenceReadSession", "provider_catalog_memberships", "source_ids"): "list[str] | None",
+        ("reference", "ReferenceReadSession", "provider_catalog_memberships", "instrument_ids"): "list[str] | None",
+    }
+)
+
+for method_name in (
     "bar",
     "freshness",
     "funding_rate",
@@ -552,7 +576,7 @@ STUB_IMPORTS = {
         "from collections.abc import Callable",
         "from typing import Literal, TypeAlias",
         "from kairospy.primitives.decimal import MoneyLike, PriceLike, QuantityLike, RateLike",
-        "from kairospy.primitives.reference import AssetClass, AssetIdRead, ExchangeIdRead, InstrumentIdRead, InstrumentKind, IssuerIdRead, ListingIdRead, MarketIdRead, ReferenceStatus, SymbolRead",
+        "from kairospy.primitives.reference import AssetClass, AssetIdRead, ExchangeIdRead, InstrumentIdRead, InstrumentKind, IssuerIdRead, ListingIdRead, MarketIdRead, ReferenceSourceIdRead, ReferenceStatus, SymbolRead, VenueIdRead",
         "from kairospy.primitives.runtime import EventIdRead, InstanceIdRead, LaunchIdRead, ProducerIdRead, WorkspaceIdRead",
         "from kairospy.primitives.time import GenerationRead, Sequence, SequenceRead, UnixNanosRead",
     ),
@@ -569,8 +593,8 @@ STUB_IMPORTS = {
 }
 STUB_POSTLUDE = {
     "reference": (
-        "ReferenceEventKind: TypeAlias = Literal['exchange_upserted', 'exchange_updated', 'asset_upserted', 'asset_updated', 'instrument_upserted', 'instrument_updated', 'listing_upserted', 'listing_updated', 'market_upserted', 'market_updated']",
-        "ReferenceEventPayload: TypeAlias = ReferenceExchange | ReferenceAsset | ReferenceInstrument | ReferenceListing | ReferenceMarket",
+        "ReferenceEventKind: TypeAlias = Literal['exchange_upserted', 'exchange_updated', 'asset_upserted', 'asset_updated', 'instrument_upserted', 'instrument_updated', 'listing_upserted', 'listing_updated', 'market_upserted', 'market_updated', 'venue_upserted', 'venue_updated', 'venue_listing_upserted', 'venue_listing_updated', 'venue_market_upserted', 'venue_market_updated', 'provider_catalog_membership_upserted', 'provider_catalog_membership_updated', 'coverage_state_changed']",
+        "ReferenceEventPayload: TypeAlias = ReferenceExchange | ReferenceAsset | ReferenceInstrument | ReferenceListing | ReferenceMarket | ReferenceVenue | ReferenceVenueListing | ReferenceVenueMarket | ReferenceProviderCatalogMembership | ReferenceCoverageStateChange",
     )
 }
 COMMON_IDENTITY_PROPERTY_TYPES = {
@@ -657,11 +681,17 @@ IDENTITY_PROPERTY_TYPES = {
         "asset_id": "AssetIdRead",
         "base_asset_id": "AssetIdRead | None",
         "quote_asset_id": "AssetIdRead | None",
+        "settlement_asset_id": "AssetIdRead | None",
         "exchange_id": "ExchangeIdRead",
+        "venue_id": "VenueIdRead",
+        "execution_venue_id": "VenueIdRead",
+        "listing_venue_id": "VenueIdRead",
         "instrument_id": "InstrumentIdRead",
         "underlying_instrument_id": "InstrumentIdRead | None",
         "listing_id": "ListingIdRead | None",
+        "origin_listing_id": "ListingIdRead | None",
         "market_id": "MarketIdRead | None",
+        "source_id": "ReferenceSourceIdRead",
         "symbol": "SymbolRead",
     },
     "risk": {

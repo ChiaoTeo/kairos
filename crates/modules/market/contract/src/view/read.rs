@@ -1,7 +1,7 @@
 use kairos_indexed_view::{MetadataSnapshot, RebuildState};
 use kairos_primitives::decimal::{DecimalParts, Price, PriceDelta, Quantity};
 use kairos_primitives::market::Provider;
-use kairos_primitives::reference::{InstrumentId, MarketId};
+use kairos_primitives::reference::{InstrumentId, MarketId, VenueId};
 use kairos_primitives::time::{Sequence, UnixNanos};
 use kairos_protocol::generated::kairos::common::v_2::Decimal64;
 use kairos_protocol::generated::kairos::market::v_2 as fb;
@@ -52,6 +52,8 @@ pub struct MarketQuoteCurrent {
     pub bid_quantity: Option<Quantity>,
     pub ask_price: Option<Price>,
     pub ask_quantity: Option<Quantity>,
+    pub bid_venue_id: Option<VenueId>,
+    pub ask_venue_id: Option<VenueId>,
     pub bid_venue_code: Option<String>,
     pub ask_venue_code: Option<String>,
     pub tape: Option<u32>,
@@ -608,6 +610,16 @@ fn quote_current(
         ask_price: value.ask_price().map(price).transpose()?,
         ask_quantity: value.ask_quantity().map(quantity).transpose()?,
         bid_venue_code: value.bid_venue_code().map(ToOwned::to_owned),
+        bid_venue_id: value
+            .bid_venue_id()
+            .map(VenueId::new)
+            .transpose()
+            .map_err(|error| ContractError::Invalid(error.to_string()))?,
+        ask_venue_id: value
+            .ask_venue_id()
+            .map(VenueId::new)
+            .transpose()
+            .map_err(|error| ContractError::Invalid(error.to_string()))?,
         ask_venue_code: value.ask_venue_code().map(ToOwned::to_owned),
         tape: (value.tape() != 0).then_some(value.tape()),
         source_observed_at: UnixNanos::new(value.source_observed_at_unix_nanos()),

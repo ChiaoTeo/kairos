@@ -26,7 +26,7 @@ from kairospy.investment.apps.reference.application.models import (
 from kairospy.primitives.reference import AssetId, ExchangeId, InstrumentId, MarketId
 from kairospy.surface.workbench import KairosWorkbenchApp, WorkbenchState
 from kairospy.surface.workbench.screens.command_line import CommandLineScreen
-from kairospy.surface.workbench.screens.effects import RunOperation
+from kairospy.surface.workbench.screens.effects import RunOperation, SetInteraction
 from kairospy.surface.workbench.screens.operation import OperationSpec
 from kairospy.surface.workbench.screens.navigation import context_items
 from kairospy.surface.workbench.screens.results import ResultKind, ResultRoute
@@ -218,30 +218,26 @@ def test_market_command_runs_in_worker_and_presents_result_choices(
     assert option_count == 1
 
 
-def test_market_search_falls_back_through_instrument_and_asset_relationships(
+def test_market_search_uses_reference_owned_v3_join_and_evidence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     expected = _market()
+    evidence = SimpleNamespace(conclusion="known")
 
     class Catalog:
-        def find_markets(self, **filters):
-            return (
-                (expected,)
-                if filters.get("instrument_id") or filters.get("asset_code")
-                else ()
+        def find_venue_markets(self, **filters):
+            assert filters["query"] == "AAPL"
+            return SimpleNamespace(
+                markets=(expected,),
+                evidence=evidence,
             )
-
-        def find_instruments(self, **_filters):
-            return (SimpleNamespace(id=expected.instrument.id),)
-
-        def find_assets(self, **_filters):
-            return (SimpleNamespace(code="AAPL"),)
 
     monkeypatch.setattr(reference_actions, "_application", lambda _state: Catalog())
 
     records = reference_actions.load_records(object(), "markets", "AAPL")
 
-    assert records == (expected,)
+    assert tuple(records) == (expected,)
+    assert records.evidence is evidence
 
 
 def test_market_search_groups_one_product_across_exchange_markets(
@@ -310,13 +306,13 @@ def test_missing_market_guides_catalog_setup_and_preserves_original_search(
                 {
                     "binding": {"provider": "massive", "source": "equity"},
                     "recommendation": "recommended",
-                    "actual_scope": "complete_united_states_equities",
+                    "actual_scope": "provider_catalog",
                     "requires_connection": True,
                     "connection_binding_present": False,
                     "already_configured": False,
-                    "reasons": ["authoritative_exchange_listings"],
+                    "reasons": ["supported_product"],
                     "limitations": [
-                        "synchronizes_complete_united_states_equities",
+                        "product_is_provider_specific",
                         "requires_provider_account",
                     ],
                 }
@@ -349,12 +345,66 @@ def test_missing_market_guides_catalog_setup_and_preserves_original_search(
 
     assert context == ("market", "catalog-setup")
     assert query == "AAPL"
-    assert "完整美国股票目录" in interaction
-    assert "不能只同步一个交易所" in interaction
+    assert "该服务商的产品目录" in interaction
+    assert "不代表完整美国股票或交易所上市目录" in interaction
     assert "配置所需的数据服务账号" in interaction
     assert ("market", "missing") in stack
     assert ("market", "catalog-exchange") in stack
     assert ("market", "catalog-instrument") in stack
+
+
+@pytest.mark.parametrize(
+    ("query", "expected_choices", "selected_query"),
+    [
+        (
+            "上证",
+            ("上海证券交易所", "上证综合指数", "浏览上交所上市股票"),
+            "上证综合指数",
+        ),
+        (
+            "深证",
+            ("深圳证券交易所", "深证成份指数", "浏览深交所上市股票"),
+            "深证成份指数",
+        ),
+        (
+            "美国股票",
+            ("浏览美国上市股票", "浏览美国成交市场", "浏览服务商股票目录"),
+            "美国 股票 市场",
+        ),
+    ],
+)
+def test_ambiguous_market_language_requires_an_explicit_intent_choice(
+    monkeypatch: pytest.MonkeyPatch,
+    query: str,
+    expected_choices: tuple[str, ...],
+    selected_query: str,
+) -> None:
+    searches: list[str] = []
+
+    def search(_state: object, _kind: str, value: str):
+        searches.append(value)
+        return ()
+
+    monkeypatch.setattr(market, "load_records", search)
+
+    async def run() -> tuple[tuple[str, ...], str]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 34)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            screen.submit(f"/market {query}")
+            await pilot.pause(0.05)
+            assert screen.session.context == ("market", "intent")
+            visible = interaction_copy_text(screen.session.interaction)
+            screen.submit("2")
+            await pilot.pause(0.1)
+            return screen.session.context, visible
+
+    context, visible = asyncio.run(run())
+
+    assert all(choice in visible for choice in expected_choices)
+    assert searches == [selected_query]
+    assert context == ("market", "missing")
 
 
 def test_catalog_account_setup_returns_to_preparation_checkpoint(
@@ -373,7 +423,7 @@ def test_catalog_account_setup_returns_to_preparation_checkpoint(
             "options": [
                 {
                     "binding": {"provider": "massive", "source": "equity"},
-                    "actual_scope": "complete_united_states_equities",
+                    "actual_scope": "provider_catalog",
                     "requires_connection": True,
                     "connection_binding_present": False,
                     "already_configured": False,
@@ -405,18 +455,18 @@ def test_catalog_account_setup_returns_to_preparation_checkpoint(
                 screen.session.context,
                 interaction_copy_text(screen.session.interaction),
                 (
-                    screen.session.market.catalog_setup_plan.credential_binding
+                    screen.session.market.catalog_setup_plan.connection_id
                     if screen.session.market.catalog_setup_plan is not None
                     else None
                 ),
             )
 
-    context, interaction, credential_binding = asyncio.run(run())
+    context, interaction, connection_id = asyncio.run(run())
 
     assert context == ("market", "catalog-setup")
     assert "开始准备" in interaction
     assert "配置所需的数据服务账号" not in interaction
-    assert credential_binding == "massive-equity-credential"
+    assert connection_id == "massive-equity-credential"
 
 
 def test_catalog_preparation_automatically_returns_to_original_market_search(
@@ -442,7 +492,7 @@ def test_catalog_preparation_automatically_returns_to_original_market_search(
         "options": [
             {
                 "binding": {"provider": "massive", "source": "equity"},
-                "actual_scope": "complete_united_states_equities",
+                "actual_scope": "provider_catalog",
                 "requires_connection": True,
                 "connection_binding_present": True,
                 "already_configured": True,
@@ -450,7 +500,7 @@ def test_catalog_preparation_automatically_returns_to_original_market_search(
                 "limitations": [],
             }
         ],
-        "_credential_binding": "massive-main-credential",
+        "_connection_id": "massive-main-credential",
     }
     usable_plan = {**initial_plan, "availability": "usable"}
     monkeypatch.setattr(market, "load_records", load_records)
@@ -762,6 +812,7 @@ def test_uninitialized_reference_search_offers_guided_preparation(
 
     assert context == ("market", "missing")
     assert "还没有可查询的标的目录" in interaction
+    assert "未找到标的" not in interaction
     assert "准备这个标的目录" in interaction
     assert "SQLite" not in interaction
     assert status == "标的目录尚未准备"
@@ -880,8 +931,8 @@ def test_binance_stocks_setup_goal_is_provider_product_not_exchange() -> None:
     with Console(width=100, record=True) as console:
         console.print(reference_actions.catalog_setup_renderable(plan))
     output = console.export_text()
-    assert "该服务商提供的完整目录" in output
-    assert "不代表该服务商是标的的上市交易所" in output
+    assert "该服务商的产品目录" in output
+    assert "不代表完整美国股票或交易所上市目录" in output
 
 
 def test_reference_results_use_user_vocabulary_and_hide_internal_ids() -> None:
@@ -921,26 +972,27 @@ def test_trading_access_search_resolves_instrument_then_checks_both_channels(
         status="active",
     )
     market_record = SimpleNamespace(
-        exchange_id="exchange:nasdaq",
+        execution_venue_id="venue:xnas",
         venue_symbol="AAPL",
-        instrument=SimpleNamespace(display_symbol="AAPL"),
+        instrument_id=instrument.id,
         status="active",
     )
     availability = SimpleNamespace(
         source_id="binance-equity",
-        instrument=instrument,
+        status="active",
     )
+    evidence = SimpleNamespace(conclusion="known")
 
     class Catalog:
-        def find_instruments(self, **filters: Any) -> tuple[Any, ...]:
+        def search_instruments(self, **filters: Any) -> Any:
             assert filters["query"] == "AAPL"
-            return (instrument,)
+            return SimpleNamespace(instruments=(instrument,), evidence=evidence)
 
-        def find_markets(self, **filters: Any) -> tuple[Any, ...]:
+        def find_venue_markets(self, **filters: Any) -> Any:
             assert filters["instrument_id"] == instrument.id
-            return (market_record,)
+            return SimpleNamespace(markets=(market_record,))
 
-        def find_instrument_availability(self, **filters: Any) -> tuple[Any, ...]:
+        def find_provider_catalog_memberships(self, **filters: Any) -> tuple[Any, ...]:
             assert filters["instrument_ids"] == (instrument.id,)
             return (availability,)
 
@@ -954,9 +1006,9 @@ def test_trading_access_search_resolves_instrument_then_checks_both_channels(
         console.print(reference_actions.records_renderable(related_kind, related))
     output = console.export_text()
 
-    assert records == (instrument,)
-    assert "交易所上市与市场" in output
-    assert "服务商可交易渠道" in output
+    assert tuple(records) == (instrument,)
+    assert "实际成交场所" in output
+    assert "服务商目录覆盖" in output
     assert "币安股票产品" in output
     assert "不代表当前账号已有行情或下单权限" in output
 
@@ -983,6 +1035,102 @@ def test_missing_trading_access_enters_the_catalog_preparation_flow() -> None:
         "retry",
         "catalog",
     )
+
+
+@pytest.mark.parametrize(
+    ("conclusion", "expected_copy"),
+    (
+        ("not_found_in_covered_scope", "在当前已完整覆盖的范围内未找到匹配记录"),
+        ("preparing", "相关目录正在准备"),
+        ("known_but_stale", "只找到陈旧的目录覆盖"),
+        ("source_unavailable", "相关目录来源当前不可用"),
+        ("unknown_outside_coverage", "当前目录覆盖尚不足以判断"),
+        (None, "当前目录覆盖尚不足以判断"),
+    ),
+)
+@pytest.mark.parametrize("market_search", (False, True))
+def test_empty_trading_access_preserves_coverage_conclusion(
+    conclusion: str | None, expected_copy: str, market_search: bool
+) -> None:
+    session = GuidedSession(root_label="trader")
+    session.enter("reference")
+    session.reference.query = "AAPL"
+    session.market.query = "AAPL"
+    spec = OperationSpec.create(
+        action_name="reference.find.trading-access",
+        audit_summary="查询 AAPL",
+        route=(
+            ResultRoute(ResultKind.MARKET)
+            if market_search
+            else ResultRoute(ResultKind.REFERENCE_RECORDS, "trading-access")
+        ),
+        operation=lambda: (),
+        running_status="正在查找…",
+    )
+    result = reference_actions.CatalogSearchResult(
+        records=(),
+        evidence=(
+            SimpleNamespace(conclusion=conclusion) if conclusion is not None else None
+        ),
+    )
+
+    handler = market.handle_success if market_search else reference.handle_success
+    effects = handler(_state(), session, spec, result)
+
+    assert effects is not None
+    covered_empty = conclusion == "not_found_in_covered_scope"
+    assert session.context == (
+        "market", "not-found" if covered_empty else "missing"
+    )
+    assert session.market.query == "AAPL"
+    copy = interaction_copy_text(session.interaction)
+    assert expected_copy in copy
+    assert "未找到标的" not in copy
+    if conclusion != "not_found_in_covered_scope":
+        assert "已完整覆盖的范围内未找到" not in copy
+    assert tuple(item.id for item in context_items(session, _state())) == (
+        ("retry", "catalog") if covered_empty else ("prepare", "retry", "catalog")
+    )
+
+
+@pytest.mark.parametrize(
+    ("conclusion", "expected_copy"),
+    (
+        ("found", "本次查询开始时的最新已提交版本"),
+        ("known_but_stale", "目录覆盖已陈旧"),
+        ("source_unavailable", "目录来源当前不可用"),
+        ("preparing", "目录正在准备"),
+    ),
+)
+@pytest.mark.parametrize("market_search", (False, True))
+def test_reference_records_preserve_knowledge_warning(
+    conclusion: str, expected_copy: str, market_search: bool
+) -> None:
+    session = GuidedSession(root_label="trader")
+    session.enter("reference")
+    spec = OperationSpec.create(
+        action_name="reference.find.markets",
+        audit_summary="查询标的",
+        route=(
+            ResultRoute(ResultKind.MARKET)
+            if market_search
+            else ResultRoute(ResultKind.REFERENCE_RECORDS, "markets")
+        ),
+        operation=lambda: (),
+        running_status="正在查找…",
+    )
+    result = reference_actions.CatalogSearchResult(
+        records=(_market(),), evidence=SimpleNamespace(conclusion=conclusion)
+    )
+
+    handler = market.handle_success if market_search else reference.handle_success
+    effects = handler(_state(), session, spec, result)
+
+    assert effects is not None
+    interactions = [effect for effect in effects if isinstance(effect, SetInteraction)]
+    assert len(interactions) == 1
+    assert expected_copy in interaction_copy_text(interactions[0].interaction)
+    assert len(session.visible_records) == 1
 
 
 def test_reference_source_management_uses_owner_status_and_page_stack() -> None:

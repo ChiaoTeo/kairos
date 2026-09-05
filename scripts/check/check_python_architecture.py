@@ -33,13 +33,13 @@ OWNER_FACADE_FUNCTIONS = {
     "types.py": frozenset({"_native"}),
     "view.py": frozenset(),
 }
-PUBLIC_DYNAMIC_RECORD_RETURN_BUDGET = 330
+PUBLIC_DYNAMIC_RECORD_RETURN_BUDGET = 324
 PUBLIC_DYNAMIC_RECORD_RETURN_BUDGETS = {
     "contracts": 15,
     "investment": 72,
     "research": 9,
-    "strategy": 90,
-    "system": 144,
+    "strategy": 86,
+    "system": 142,
 }
 SERIALIZATION_METHODS = {"as_dict", "as_manifest", "to_json_dict"}
 
@@ -147,6 +147,18 @@ def main() -> int:
     failures: list[str] = []
     python_files = tuple(sorted(PACKAGE.rglob("*.py")))
 
+    for path in python_files:
+        for line_number, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            if "type: ignore" in line or "pyright: ignore" in line:
+                _failure(
+                    failures,
+                    path,
+                    line_number,
+                    "type-check suppression is forbidden; validate or narrow at the boundary",
+                )
+
     dynamic_returns = _public_dynamic_record_returns(python_files)
     if len(dynamic_returns) > PUBLIC_DYNAMIC_RECORD_RETURN_BUDGET:
         added = len(dynamic_returns) - PUBLIC_DYNAMIC_RECORD_RETURN_BUDGET
@@ -171,13 +183,13 @@ def main() -> int:
     reference_typed_results = {
         PACKAGE / "contracts" / "reference" / "client.py": {
             "ReferenceReadSession": {
-                "catalog": "ReferenceCatalogSnapshot",
+                "catalog": "ReferenceCatalogStatus",
                 "option_coverage": "ReferenceOptionCoverage",
             },
             "ReferenceClient": {
                 "health": "ReferenceHealthResponse",
                 "runtime_status": "ReferenceRuntimeStatusResponse",
-                "catalog": "ReferenceCatalogSnapshot",
+                "catalog": "ReferenceCatalogStatus",
                 "option_coverage": "ReferenceOptionCoverage",
             },
         },
@@ -190,7 +202,7 @@ def main() -> int:
             "ReferenceApplication": {
                 "health": "ReferenceHealthResponse",
                 "runtime_status": "ReferenceRuntimeStatusResponse",
-                "catalog": "ReferenceCatalogSnapshot",
+                "catalog": "ReferenceCatalogStatus",
                 "option_coverage": "ReferenceOptionCoverage",
             }
         },
@@ -215,7 +227,7 @@ def main() -> int:
             "ReferenceSystemClient": {
                 "health": "ReferenceHealthResponse",
                 "reference_status": "ReferenceRuntimeStatusResponse",
-                "catalog": "ReferenceCatalogSnapshot",
+                "catalog": "ReferenceCatalogStatus",
             },
         },
     }

@@ -25,13 +25,16 @@ impl ExecutionActor {
     pub(crate) fn intent_for_idempotency_key(
         &self,
         key: &str,
-    ) -> Result<Option<&IntentState>, String> {
+    ) -> Result<Option<&IntentState>, IntentError> {
         self.intent_idempotency
             .get(key)
             .map(|intent_id| {
                 self.intents
                     .get(intent_id)
-                    .ok_or_else(|| "idempotency record references missing intent".to_string())
+                    .ok_or_else(|| IntentError::MissingIdempotentIntent {
+                        key: key.to_owned(),
+                        intent_id: intent_id.clone(),
+                    })
             })
             .transpose()
     }
@@ -55,11 +58,14 @@ impl ExecutionActor {
         intent_id: &str,
         request: SubmitOrder,
         due_at_unix_nanos: UnixNanos,
-    ) -> Result<(), String> {
+    ) -> Result<(), IntentError> {
         let state = self
             .intents
             .get_mut(intent_id)
-            .ok_or_else(|| "pending order owner intent is missing".to_string())?;
+            .ok_or_else(|| IntentError::MissingIntent {
+                intent_id: intent_id.to_owned(),
+                operation: "scheduling a pending order",
+            })?;
         if !state
             .pending_orders
             .iter()
@@ -101,11 +107,14 @@ impl ExecutionActor {
         &mut self,
         intent_id: &str,
         transaction: QuoteRefreshTransaction,
-    ) -> Result<(), String> {
+    ) -> Result<(), IntentError> {
         let state = self
             .intents
             .get_mut(intent_id)
-            .ok_or_else(|| "quote refresh owner intent is missing".to_string())?;
+            .ok_or_else(|| IntentError::MissingIntent {
+                intent_id: intent_id.to_owned(),
+                operation: "recording a quote refresh",
+            })?;
         state.pending_quote_refresh = Some(transaction);
         self.generation = self.generation.saturating_add(1);
         Ok(())
@@ -123,26 +132,39 @@ impl ExecutionActor {
         intent_id: &str,
         leg_id: &str,
         order_id: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), IntentError> {
         let (plan_id, leg_id) = {
-            let state = self
-                .intents
-                .get_mut(intent_id)
-                .ok_or_else(|| "intent plan owner is missing".to_string())?;
-            let order_id = OrderId::new(order_id.to_owned())?;
+            let state =
+                self.intents
+                    .get_mut(intent_id)
+                    .ok_or_else(|| IntentError::MissingIntent {
+                        intent_id: intent_id.to_owned(),
+                        operation: "attaching a plan order",
+                    })?;
+            let order_id = OrderId::new(order_id.to_owned()).map_err(|source| {
+                IntentError::InvalidSemantic {
+                    field: "order_id",
+                    source,
+                }
+            })?;
             if !state.order_ids.iter().any(|value| value == &order_id) {
                 state.order_ids.push(order_id.clone());
             }
             let plan = state
                 .plan
                 .as_mut()
-                .ok_or_else(|| "intent has no execution plan".to_string())?;
+                .ok_or_else(|| IntentError::MissingPlan {
+                    intent_id: intent_id.to_owned(),
+                })?;
             let plan_id = plan.plan_id.clone();
             let leg = plan
                 .legs
                 .iter_mut()
                 .find(|leg| leg.leg_id == leg_id)
-                .ok_or_else(|| "intent plan leg is missing".to_string())?;
+                .ok_or_else(|| IntentError::MissingLeg {
+                    intent_id: intent_id.to_owned(),
+                    leg_id: leg_id.to_owned(),
+                })?;
             if !leg.order_ids.iter().any(|value| value == &order_id) {
                 leg.order_ids.push(order_id);
             }
@@ -163,13 +185,20 @@ impl ExecutionActor {
         intent_id: &str,
         leg_id: crate::domain::LegId,
         order_id: &str,
-    ) -> Result<(), String> {
-        let order_id = OrderId::new(order_id.to_owned())?;
+    ) -> Result<(), IntentError> {
+        let order_id =
+            OrderId::new(order_id.to_owned()).map_err(|source| IntentError::InvalidSemantic {
+                field: "order_id",
+                source,
+            })?;
         let plan_id = {
-            let state = self
-                .intents
-                .get_mut(intent_id)
-                .ok_or_else(|| "intent owner is missing".to_string())?;
+            let state =
+                self.intents
+                    .get_mut(intent_id)
+                    .ok_or_else(|| IntentError::MissingIntent {
+                        intent_id: intent_id.to_owned(),
+                        operation: "attaching an algorithm order",
+                    })?;
             if !state.order_ids.iter().any(|value| value == &order_id) {
                 state.order_ids.push(order_id.clone());
             }
@@ -177,7 +206,9 @@ impl ExecutionActor {
                 .plan
                 .as_ref()
                 .map(|plan| plan.plan_id.clone())
-                .ok_or_else(|| "intent has no execution plan".to_string())?
+                .ok_or_else(|| IntentError::MissingPlan {
+                    intent_id: intent_id.to_owned(),
+                })?
         };
         self.attach_plan_identity(order_id.as_str(), plan_id, leg_id);
         Ok(())
@@ -187,7 +218,7 @@ impl ExecutionActor {
         &mut self,
         intent_id: &str,
         orders: &[ExecutionOrder],
-    ) -> Result<(), String> {
+    ) -> Result<(), IntentError> {
         let Some(plan) = self
             .intents
             .get_mut(intent_id)
@@ -205,7 +236,10 @@ impl ExecutionActor {
                 .try_fold(Quantity::ZERO, |total, order| {
                     total.checked_add(order.filled_quantity)
                 })
-                .map_err(|_| "execution leg completed quantity overflow".to_string())?;
+                .map_err(|source| IntentError::Arithmetic {
+                    operation: "execution leg completed quantity aggregation",
+                    source,
+                })?;
             let next = if leg_orders.is_empty() {
                 leg.lifecycle
             } else if leg_orders
@@ -246,15 +280,20 @@ impl ExecutionActor {
     pub(crate) fn apply_intent_event(
         &mut self,
         mut event: IntentEvent,
-    ) -> Result<(IntentEvent, IntentState), String> {
+    ) -> Result<(IntentEvent, IntentState), IntentError> {
         let state = self
             .intents
             .get_mut(event.intent_id.as_str())
-            .ok_or_else(|| "intent event references unknown intent".to_string())?;
+            .ok_or_else(|| IntentError::MissingIntent {
+                intent_id: event.intent_id.to_string(),
+                operation: "applying an intent event",
+            })?;
         if event.strategy_decision_id.is_none() {
             event.strategy_decision_id = state.intent.strategy_decision_id.clone();
         } else if event.strategy_decision_id != state.intent.strategy_decision_id {
-            return Err("intent event strategy decision identity changed".to_string());
+            return Err(IntentError::StrategyDecisionIdentityChanged {
+                intent_id: event.intent_id.to_string(),
+            });
         }
         event.previous_status = self
             .intent_events

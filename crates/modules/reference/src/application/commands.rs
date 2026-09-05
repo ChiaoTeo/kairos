@@ -35,6 +35,7 @@ impl From<UpsertInstrumentCommand> for crate::domain::Instrument {
             issuer_id: value.issuer_id,
             share_class: value.share_class,
             primary_currency_asset_id: value.primary_currency_asset_id,
+            settlement_asset_id: value.settlement_asset_id,
             underlying_instrument_id: value.underlying_instrument_id,
             expiry_unix_nanos: value.expiry_unix_nanos,
             strike: value.strike,

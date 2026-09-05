@@ -10,11 +10,11 @@ use kairos_integration::{OrderEntryEvent, OrderEntryStatus};
 use kairos_primitives::time::Sequence;
 
 use crate::domain::{
-    CommitmentBasis, CommitmentStatus, ExecutionEvent, ExecutionFill, ExecutionFillReport,
-    ExecutionOrder, ExecutionOrderStatus, IntentEvent, IntentState, LegLifecycle, Money,
-    OrderCommitment, OrderId, Quantity, QuoteRefreshTransaction, RiskReservationEvidence,
-    RiskReservationSagaStatus, SubmitOrder, UnixNanos, UnknownRemoteOrder,
-    UnknownRemoteOrderResolution,
+    AlgorithmError, AlgorithmInvariant, CommitmentBasis, CommitmentStatus, ExecutionEvent,
+    ExecutionFill, ExecutionFillReport, ExecutionOrder, ExecutionOrderStatus, IntentError,
+    IntentEvent, IntentState, LegLifecycle, Money, OrderCommitment, OrderError, OrderId, Quantity,
+    QuoteRefreshTransaction, RiskReservationEvidence, RiskReservationSagaStatus, SubmitOrder,
+    UnixNanos, UnknownRemoteOrder, UnknownRemoteOrderResolution,
 };
 
 mod algorithms;
@@ -141,12 +141,16 @@ impl ExecutionActor {
     pub(crate) fn advance_business_time(
         &mut self,
         event_time_unix_nanos: UnixNanos,
-    ) -> Result<bool, String> {
-        if self
-            .business_time_unix_nanos
-            .is_some_and(|current| event_time_unix_nanos < current)
-        {
-            return Err("execution business time cannot move backwards".into());
+    ) -> Result<bool, crate::domain::ExecutionRuntimeError> {
+        if let Some(current) = self.business_time_unix_nanos {
+            if event_time_unix_nanos < current {
+                return Err(
+                    crate::domain::ExecutionRuntimeError::BusinessTimeRegression {
+                        current,
+                        requested: event_time_unix_nanos,
+                    },
+                );
+            }
         }
         if self.business_time_unix_nanos == Some(event_time_unix_nanos) {
             return Ok(false);

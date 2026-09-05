@@ -191,16 +191,20 @@ def test_execution_binding_exposes_every_indexed_family() -> None:
         assert hasattr(native.ExecutionCurrentView, method)
 
 
-def test_execution_backtest_quote_validates_optional_decimal_fields() -> None:
+@pytest.mark.parametrize("field", ["bid_price", "bid_quantity", "ask_price", "ask_quantity"])
+def test_execution_backtest_quote_validates_optional_decimal_fields(field: str) -> None:
     native = import_module("kairospy._native_execution_contract")
 
-    with pytest.raises(native.ExecutionInvalidInputError, match="bid_price"):
+    with pytest.raises(native.ExecutionInvalidInputError, match=field):
         native.ExecutionBacktestMarketRequest.quote(
             market_id="market:BTCUSDT",
             instrument_id="instrument:BTCUSDT",
             observed_at_unix_nanos=1,
             source_id="test",
-            bid_price="not-a-decimal",
+            bid_price="not-a-decimal" if field == "bid_price" else None,
+            bid_quantity="not-a-decimal" if field == "bid_quantity" else None,
+            ask_price="not-a-decimal" if field == "ask_price" else None,
+            ask_quantity="not-a-decimal" if field == "ask_quantity" else None,
         )
 
 

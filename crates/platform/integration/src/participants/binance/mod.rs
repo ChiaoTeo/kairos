@@ -1245,7 +1245,7 @@ macro_rules! futures_rest_capabilities {
     ($name:ident, $prefix:literal, $account_path:literal, $balance_path:literal, $kind:expr) => {
         impl crate::InstrumentCatalogQuery for $name {
             async fn fetch_instruments(
-                &mut self,
+                &self,
             ) -> Result<crate::ExternalInstrumentCatalog, crate::IntegrationError> {
                 let value = self
                     .service
@@ -1261,10 +1261,11 @@ macro_rules! futures_rest_capabilities {
                         crate::services::participants::binance::market::derivative_instruments(
                             &value, $kind,
                         )?,
+                    venues: Vec::new(),
                 })
             }
             async fn fetch_instruments_page(
-                &mut self,
+                &self,
                 cursor: Option<&str>,
                 limit: usize,
             ) -> Result<crate::ExternalInstrumentCatalogPage, crate::IntegrationError> {
@@ -1277,6 +1278,7 @@ macro_rules! futures_rest_capabilities {
                             )
                             .expect("static Binance participant"),
                             instruments: Vec::new(),
+                            venues: Vec::new(),
                         },
                         next_cursor: None,
                         complete: true,

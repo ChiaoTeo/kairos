@@ -4,6 +4,7 @@ from kairospy.strategy import (
     BarEvent,
     ImmediateAlgorithm,
     InstrumentId,
+    MarketId,
     Strategy,
     StrategyContext,
     Quantity,
@@ -17,9 +18,7 @@ class SpyHourlyBarStrategy(Strategy):
 
     def on_start(self, ctx: StrategyContext) -> None:
         ctx.state.set_int("bar_count", 0)
-        market = ctx.reference.require_market(
-            symbol="SPY", exchange="massive", instrument_kind="equity"
-        )
+        market = ctx.reference.require_market(MarketId("market:xnas:equity:SPY"))
         ctx.market.subscribe_bars(market.id, timeframe="1h")
 
     def on_bar(self, ctx: StrategyContext, event: BarEvent) -> None:

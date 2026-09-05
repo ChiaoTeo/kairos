@@ -1,0 +1,15 @@
+include "common.fbs";
+
+namespace kairos.reference.v3;
+
+table Venue {
+  venue_id:string (required);
+  name:string (required);
+  venue_kind:VenueKind = UNKNOWN;
+  roles:[VenueRole] (required);
+  mic:string;
+  operating_mic:string;
+  parent_venue_id:string;
+  jurisdiction:string;
+  status:ReferenceLifecycleStatus = UNKNOWN;
+}

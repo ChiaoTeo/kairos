@@ -11,7 +11,7 @@ use kairos_reference_contract::{
 
 use crate::application::{ReferenceApplication, ReferenceRefreshResult};
 use crate::domain::{
-    ReferenceError, ReferenceResult, ReferenceSourceDefinition, SourceCredentialBinding,
+    ReferenceError, ReferenceResult, ReferenceSourceDefinition, SourceConnectionId,
     SourceDesiredState, SourceHealth, SourceScope, SourceScopeKind,
 };
 use crate::services::providers::ReferenceSourceBinding;
@@ -255,7 +255,6 @@ impl ReferenceApplication {
             event_sequence: result.event_sequence,
             changed: result.changed,
             change_count: result.event_count,
-            events: result.events,
         })
     }
 
@@ -288,7 +287,6 @@ impl ReferenceApplication {
             event_sequence: result.event_sequence,
             changed: result.changed,
             change_count: result.event_count,
-            events: result.events,
         })
     }
 }
@@ -325,14 +323,14 @@ fn domain_source_definition(
     request: ReferenceSourceDefinitionRequest,
 ) -> ReferenceResult<ReferenceSourceDefinition> {
     let binding = ReferenceSourceBinding::from_contract(request.binding);
-    let credential_binding = request
-        .credential_binding
-        .map(SourceCredentialBinding::new)
+    let connection_id = request
+        .connection_id
+        .map(SourceConnectionId::new)
         .transpose()?;
     binding.definition(
         domain_source_scope(request.scope),
         domain_source_desired_state(request.desired_state),
-        credential_binding,
+        connection_id,
     )
 }
 
@@ -413,7 +411,7 @@ mod tests {
                 id: Some("instrument:equity:US:SPY:common".into()),
             },
             desired_state: ReferenceSourceDesiredState::Paused,
-            credential_binding: Some("massive.default".into()),
+            connection_id: Some("massive-main".into()),
         })
         .unwrap();
 
@@ -425,10 +423,7 @@ mod tests {
             Some("instrument:equity:US:SPY:common")
         );
         assert_eq!(definition.desired_state, SourceDesiredState::Paused);
-        assert_eq!(
-            definition.credential_binding.as_deref(),
-            Some("massive.default")
-        );
+        assert_eq!(definition.connection_id.as_deref(), Some("massive-main"));
         assert_eq!(definition.sync_policy, SourceSyncPolicy::ScopedSnapshot);
     }
 

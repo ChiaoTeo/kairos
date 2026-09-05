@@ -25,9 +25,11 @@ impl ExecutionActor {
         commitment: OrderCommitment,
         risk_reservation: RiskReservationEvidence,
         now: u64,
-    ) -> Result<(ExecutionOrder, ExecutionEvent), String> {
+    ) -> Result<(ExecutionOrder, ExecutionEvent), OrderError> {
         if self.contains_order(request.order_id.as_str()) {
-            return Err("order_id already exists".into());
+            return Err(OrderError::DuplicateOrder {
+                order_id: request.order_id.clone(),
+            });
         }
         let mut order = ExecutionOrder::new(
             request.order_id.to_string(),
@@ -48,12 +50,18 @@ impl ExecutionActor {
                 "{}:attempt:1",
                 order.order_id
             ))
-            .map_err(|error| error.to_string())?,
+            .map_err(|source| OrderError::InvalidSemantic {
+                field: "attempt_id",
+                source,
+            })?,
             command: crate::domain::ExecutionCommandKind::Submit,
             provider_connection_id: kairos_primitives::integration::IntegrationSourceId::new(
                 selected_route.route_id.to_string(),
             )
-            .map_err(|error| error.to_string())?,
+            .map_err(|source| OrderError::InvalidSemantic {
+                field: "provider_connection_id",
+                source,
+            })?,
             selected_route: selected_route.clone(),
             command_started_at_unix_nanos: now.into(),
             delivery_certainty: crate::domain::DeliveryCertainty::NotSent,
@@ -75,14 +83,19 @@ impl ExecutionActor {
         order_id: &str,
         reservation: RiskReservationEvidence,
         now: u64,
-    ) -> Result<(ExecutionOrder, ExecutionEvent), String> {
-        let mut order = self
-            .orders
-            .get(order_id)
-            .cloned()
-            .ok_or_else(|| "unknown order".to_string())?;
+    ) -> Result<(ExecutionOrder, ExecutionEvent), OrderError> {
+        let mut order =
+            self.orders
+                .get(order_id)
+                .cloned()
+                .ok_or_else(|| OrderError::UnknownOrder {
+                    order_id: order_id.to_owned(),
+                })?;
         if order.status != ExecutionOrderStatus::Pending {
-            return Err("order is not pending admission".into());
+            return Err(OrderError::NotPendingAdmission {
+                order_id: order.order_id,
+                status: order.status,
+            });
         }
         order.status = ExecutionOrderStatus::Submitting;
         order.updated_at_unix_nanos = now.into();
@@ -146,7 +159,7 @@ impl ExecutionActor {
         order_id: &str,
         remaining: Quantity,
         now: u64,
-    ) -> Result<(), String> {
+    ) -> Result<(), OrderError> {
         let Some(commitment) = self.commitments.get_mut(order_id) else {
             return Ok(());
         };
@@ -160,18 +173,25 @@ impl ExecutionActor {
         let amount = match commitment.basis {
             CommitmentBasis::QuotePriceCap { price_cap } => remaining
                 .checked_mul(price_cap)
-                .map_err(|error| error.to_string())?,
+                .map_err(|source| OrderError::Arithmetic {
+                    operation: "commitment resize",
+                    source,
+                })?,
             CommitmentBasis::ContractNotional { .. } => {
-                return Err(
-                    "contract commitment resizing requires execution-channel-specific semantics"
-                        .into(),
-                );
+                return Err(OrderError::UnsupportedCommitmentResize {
+                    order_id: commitment.order_id.clone(),
+                    basis: commitment.basis.clone(),
+                });
             },
             CommitmentBasis::BaseQuantity
             | CommitmentBasis::CloseablePositionQuantity
             | CommitmentBasis::SimulationQuantity => {
-                Money::new(remaining.mantissa(), remaining.scale())
-                    .map_err(|error| error.to_string())?
+                Money::new(remaining.mantissa(), remaining.scale()).map_err(|source| {
+                    OrderError::Arithmetic {
+                        operation: "commitment resize",
+                        source,
+                    }
+                })?
             },
         };
         commitment.remaining_quantity = remaining;
@@ -185,11 +205,13 @@ impl ExecutionActor {
         &mut self,
         order_id: &str,
         event: OrderEntryEvent,
-    ) -> Result<(ExecutionOrder, ExecutionEvent), String> {
+    ) -> Result<(ExecutionOrder, ExecutionEvent), OrderError> {
         let mut order = self
             .order(order_id)
             .cloned()
-            .ok_or_else(|| "unknown order".to_string())?;
+            .ok_or_else(|| OrderError::UnknownOrder {
+                order_id: order_id.to_owned(),
+            })?;
         let occurred_at = event.occurred_at_unix_nanos;
         order.remote_order_id = event.remote_order_id;
         order.updated_at_unix_nanos = event.occurred_at_unix_nanos;
@@ -279,21 +301,28 @@ impl ExecutionActor {
         &mut self,
         order_id: &str,
         now: u64,
-    ) -> Result<(ExecutionOrder, ExecutionEvent), String> {
+    ) -> Result<(ExecutionOrder, ExecutionEvent), OrderError> {
         let mut order = self
             .order(order_id)
             .cloned()
-            .ok_or_else(|| "unknown order".to_string())?;
+            .ok_or_else(|| OrderError::UnknownOrder {
+                order_id: order_id.to_owned(),
+            })?;
         if order.attempts.iter().rev().any(|attempt| {
             attempt.command == crate::domain::ExecutionCommandKind::Cancel
                 && attempt.delivery_certainty == crate::domain::DeliveryCertainty::Indeterminate
         }) {
-            return Err("order has an indeterminate cancel attempt; reconcile before retry".into());
+            return Err(OrderError::IndeterminateCancelAttempt {
+                order_id: order.order_id,
+            });
         }
-        let selected_route = order
-            .selected_route
-            .clone()
-            .ok_or_else(|| "order has no durable selected route".to_string())?;
+        let selected_route =
+            order
+                .selected_route
+                .clone()
+                .ok_or_else(|| OrderError::MissingSelectedRoute {
+                    order_id: order.order_id.clone(),
+                })?;
         let cancel_sequence = order
             .attempts
             .iter()
@@ -305,12 +334,18 @@ impl ExecutionActor {
                 "{}:cancel:{cancel_sequence}",
                 order.order_id
             ))
-            .map_err(|error| error.to_string())?,
+            .map_err(|source| OrderError::InvalidSemantic {
+                field: "attempt_id",
+                source,
+            })?,
             command: crate::domain::ExecutionCommandKind::Cancel,
             provider_connection_id: kairos_primitives::integration::IntegrationSourceId::new(
                 selected_route.route_id.to_string(),
             )
-            .map_err(|error| error.to_string())?,
+            .map_err(|source| OrderError::InvalidSemantic {
+                field: "provider_connection_id",
+                source,
+            })?,
             selected_route,
             command_started_at_unix_nanos: now.into(),
             delivery_certainty: crate::domain::DeliveryCertainty::Indeterminate,
@@ -327,17 +362,21 @@ impl ExecutionActor {
         order_id: &str,
         certainty: crate::domain::DeliveryCertainty,
         now: u64,
-    ) -> Result<(ExecutionOrder, ExecutionEvent), String> {
+    ) -> Result<(ExecutionOrder, ExecutionEvent), OrderError> {
         let mut order = self
             .order(order_id)
             .cloned()
-            .ok_or_else(|| "unknown order".to_string())?;
+            .ok_or_else(|| OrderError::UnknownOrder {
+                order_id: order_id.to_owned(),
+            })?;
         let attempt = order
             .attempts
             .iter_mut()
             .rev()
             .find(|attempt| attempt.command == crate::domain::ExecutionCommandKind::Cancel)
-            .ok_or_else(|| "cancel attempt is missing".to_string())?;
+            .ok_or_else(|| OrderError::MissingCancelAttempt {
+                order_id: order.order_id.clone(),
+            })?;
         attempt.delivery_certainty = certainty;
         order.updated_at_unix_nanos = now.into();
         let event = order_event(

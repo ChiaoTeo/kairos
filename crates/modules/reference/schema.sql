@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS reference_source_registry (
     scope_id TEXT,
     desired_state TEXT NOT NULL
         CHECK (desired_state IN ('enabled', 'disabled', 'paused', 'removed')),
-    credential_binding TEXT,
+    connection_id TEXT,
     sync_policy TEXT NOT NULL
         CHECK (sync_policy IN (
             'full_snapshot',
@@ -74,7 +74,7 @@ INSERT OR IGNORE INTO reference_meta(
     generation,
     event_sequence,
     committed_at_unix_nanos
-) VALUES (1, 6, 0, 0, 0);
+) VALUES (1, 10, 0, 0, 0);
 
 -- v2 removes the derived Access views. Canonical provider facts can
 -- rebuild every retained Reference row; these tables never owned history.
@@ -157,6 +157,115 @@ CREATE INDEX IF NOT EXISTS reference_markets_exchange_idx
 CREATE INDEX IF NOT EXISTS reference_markets_listing_idx
     ON reference_markets_current(listing_id, status, market_id);
 
+-- v3 separates formal listing venues from independently addressable
+-- execution/reporting facilities. The v2 tables above remain an explicit
+-- compatibility records while consumers migrate.
+CREATE TABLE IF NOT EXISTS reference_venues_current (
+    venue_id TEXT PRIMARY KEY,
+    venue_kind TEXT NOT NULL,
+    mic TEXT,
+    operating_mic TEXT,
+    parent_venue_id TEXT,
+    jurisdiction TEXT,
+    status TEXT NOT NULL,
+    payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS reference_venues_mic_idx
+    ON reference_venues_current(mic, status, venue_id);
+CREATE INDEX IF NOT EXISTS reference_venues_parent_idx
+    ON reference_venues_current(parent_venue_id, venue_id);
+
+CREATE TABLE IF NOT EXISTS reference_venue_listings_current (
+    listing_id TEXT PRIMARY KEY,
+    instrument_id TEXT NOT NULL,
+    listing_venue_id TEXT NOT NULL,
+    market_segment_id TEXT,
+    listing_symbol TEXT NOT NULL,
+    listing_role TEXT NOT NULL,
+    status TEXT NOT NULL,
+    effective_to_unix_nanos INTEGER,
+    payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS reference_venue_listings_instrument_idx
+    ON reference_venue_listings_current(instrument_id, status, listing_id);
+CREATE INDEX IF NOT EXISTS reference_venue_listings_venue_symbol_idx
+    ON reference_venue_listings_current(listing_venue_id, listing_symbol, status);
+
+CREATE TABLE IF NOT EXISTS reference_venue_markets_current (
+    market_id TEXT PRIMARY KEY,
+    instrument_id TEXT NOT NULL,
+    execution_venue_id TEXT NOT NULL,
+    origin_listing_id TEXT,
+    market_segment_id TEXT,
+    venue_symbol TEXT,
+    status TEXT NOT NULL,
+    effective_to_unix_nanos INTEGER,
+    payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS reference_venue_markets_instrument_idx
+    ON reference_venue_markets_current(instrument_id, status, market_id);
+CREATE INDEX IF NOT EXISTS reference_venue_markets_venue_symbol_idx
+    ON reference_venue_markets_current(execution_venue_id, venue_symbol, status);
+CREATE INDEX IF NOT EXISTS reference_venue_markets_listing_idx
+    ON reference_venue_markets_current(origin_listing_id, status, market_id);
+
+CREATE TABLE IF NOT EXISTS reference_provider_catalog_memberships_current (
+    source_id TEXT NOT NULL,
+    instrument_id TEXT NOT NULL,
+    provider_symbol TEXT,
+    provider_product TEXT,
+    status TEXT NOT NULL,
+    effective_to_unix_nanos INTEGER,
+    payload TEXT NOT NULL,
+    PRIMARY KEY(source_id, instrument_id)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS reference_provider_catalog_memberships_instrument_idx
+    ON reference_provider_catalog_memberships_current(instrument_id, status, source_id);
+
+CREATE TABLE IF NOT EXISTS reference_venue_identifier_mappings_current (
+    mapping_key TEXT PRIMARY KEY,
+    source_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    provider_product TEXT NOT NULL,
+    identifier_kind TEXT NOT NULL,
+    identifier TEXT NOT NULL,
+    venue_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    UNIQUE(provider, provider_product, identifier_kind, identifier)
+);
+CREATE INDEX IF NOT EXISTS reference_venue_identifier_mappings_venue_idx
+    ON reference_venue_identifier_mappings_current(venue_id, status, mapping_key);
+
+CREATE TABLE IF NOT EXISTS reference_coverage_current (
+    coverage_id TEXT PRIMARY KEY,
+    source_id TEXT NOT NULL,
+    completeness TEXT NOT NULL,
+    state TEXT NOT NULL,
+    generation INTEGER,
+    event_sequence INTEGER,
+    last_attempt_unix_nanos INTEGER,
+    last_success_unix_nanos INTEGER,
+    stale_after_unix_nanos INTEGER,
+    has_last_known_good INTEGER NOT NULL CHECK(has_last_known_good IN (0, 1)),
+    payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS reference_coverage_source_state_idx
+    ON reference_coverage_current(source_id, state, coverage_id);
+
+-- Source workers stage conclusion-changing coverage transitions here. The
+-- Actor applies them with the catalog watermark, lifecycle event and outbox
+-- publication in one transaction.
+CREATE TABLE IF NOT EXISTS reference_coverage_pending_transition (
+    source_id TEXT PRIMARY KEY,
+    state TEXT NOT NULL CHECK(state IN (
+        'not_configured', 'waiting', 'scanning', 'promoting', 'usable',
+        'stale', 'retry_waiting', 'paused', 'unavailable'
+    )),
+    has_last_known_good INTEGER NOT NULL CHECK(has_last_known_good IN (0, 1)),
+    last_attempt_unix_nanos INTEGER NOT NULL
+) WITHOUT ROWID;
+
 CREATE TABLE IF NOT EXISTS reference_publication_state (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     published_sequence INTEGER NOT NULL
@@ -195,11 +304,6 @@ CREATE INDEX IF NOT EXISTS reference_provider_staging_provider_idx
     ON reference_provider_staging(provider, ordinal, record_kind, record_id);
 CREATE INDEX IF NOT EXISTS reference_provider_staging_record_lookup_idx
     ON reference_provider_staging(provider, record_kind, record_id, ordinal DESC);
-
-CREATE TABLE IF NOT EXISTS reference_provider_pending_promotion (
-    provider TEXT PRIMARY KEY,
-    operation TEXT NOT NULL CHECK(operation IN ('promote', 'delete'))
-) WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS reference_provider_sync (
     provider TEXT PRIMARY KEY,

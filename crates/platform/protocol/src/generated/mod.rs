@@ -63,6 +63,52 @@ pub mod kairos {
             mod exchange_upserted_generated;
             pub use exchange_upserted_generated::*;
         }
+        pub mod v_3 {
+            mod coverage_completeness_generated;
+            pub use coverage_completeness_generated::*;
+            mod coverage_state_generated;
+            pub use coverage_state_generated::*;
+            mod listing_generated;
+            pub use listing_generated::*;
+            mod listing_role_generated;
+            pub use listing_role_generated::*;
+            mod market_generated;
+            pub use market_generated::*;
+            mod provider_catalog_membership_generated;
+            pub use provider_catalog_membership_generated::*;
+            mod reference_coverage_generated;
+            pub use reference_coverage_generated::*;
+            mod reference_fact_kind_generated;
+            pub use reference_fact_kind_generated::*;
+            mod reference_lifecycle_status_generated;
+            pub use reference_lifecycle_status_generated::*;
+            mod trading_rules_generated;
+            pub use trading_rules_generated::*;
+            mod venue_generated;
+            pub use venue_generated::*;
+            mod venue_kind_generated;
+            pub use venue_kind_generated::*;
+            mod venue_role_generated;
+            pub use venue_role_generated::*;
+            mod coverage_state_changed_generated;
+            pub use coverage_state_changed_generated::*;
+            mod listing_updated_generated;
+            pub use listing_updated_generated::*;
+            mod listing_upserted_generated;
+            pub use listing_upserted_generated::*;
+            mod market_updated_generated;
+            pub use market_updated_generated::*;
+            mod market_upserted_generated;
+            pub use market_upserted_generated::*;
+            mod provider_catalog_membership_updated_generated;
+            pub use provider_catalog_membership_updated_generated::*;
+            mod provider_catalog_membership_upserted_generated;
+            pub use provider_catalog_membership_upserted_generated::*;
+            mod venue_updated_generated;
+            pub use venue_updated_generated::*;
+            mod venue_upserted_generated;
+            pub use venue_upserted_generated::*;
+        }
     }
 
     pub mod market {

@@ -25,7 +25,10 @@ mod tests {
     use crate::account::BrokerId;
     use crate::execution::OrderId;
     use crate::market::Provider;
-    use crate::reference::{ExchangeId, InstrumentId, InstrumentKind, ListingId, MarketId};
+    use crate::reference::{
+        ExchangeId, InstrumentId, InstrumentKind, JurisdictionCode, ListingId, MarketId, Mic,
+        VenueId,
+    };
 
     #[test]
     fn spot_identity_keeps_asset_and_market_context_separate() {
@@ -61,6 +64,29 @@ mod tests {
                 .as_str(),
             "market:nasdaq:equity:AAPL:USD"
         );
+    }
+
+    #[test]
+    fn v3_identities_distinguish_listing_and_execution_venues() {
+        let listing_venue = VenueId::new("venue:XNAS").unwrap();
+        let execution_venue = VenueId::new("venue:IEXG").unwrap();
+
+        assert_eq!(
+            ListingId::listing_venue(&listing_venue, InstrumentKind::Equity, "aapl")
+                .unwrap()
+                .as_str(),
+            "listing:XNAS:equity:AAPL"
+        );
+        assert_eq!(
+            MarketId::execution_venue(&execution_venue, InstrumentKind::Equity, "aapl")
+                .unwrap()
+                .as_str(),
+            "market:IEXG:equity:AAPL"
+        );
+        assert_eq!(Mic::new("XNAS").unwrap().as_str(), "XNAS");
+        assert!(Mic::new("Nasdaq").is_err());
+        assert_eq!(JurisdictionCode::new("US").unwrap().as_str(), "US");
+        assert!(JurisdictionCode::new("USA").is_err());
     }
 
     #[test]

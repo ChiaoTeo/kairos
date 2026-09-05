@@ -64,7 +64,7 @@ impl MassiveCurrenciesRestConnection {
 }
 
 impl InstrumentCatalogQuery for MassiveCurrenciesRestConnection {
-    async fn fetch_instruments(&mut self) -> Result<ExternalInstrumentCatalog, IntegrationError> {
+    async fn fetch_instruments(&self) -> Result<ExternalInstrumentCatalog, IntegrationError> {
         let instruments = self
             .service
             .tickers()
@@ -77,11 +77,12 @@ impl InstrumentCatalogQuery for MassiveCurrenciesRestConnection {
             participant: ParticipantRef::new(ParticipantKind::DataProvider, "massive")
                 .expect("static Massive participant"),
             instruments,
+            venues: Vec::new(),
         })
     }
 
     async fn fetch_instruments_page(
-        &mut self,
+        &self,
         cursor: Option<&str>,
         limit: usize,
     ) -> Result<ExternalInstrumentCatalogPage, IntegrationError> {
@@ -104,6 +105,7 @@ impl InstrumentCatalogQuery for MassiveCurrenciesRestConnection {
                 participant: ParticipantRef::new(ParticipantKind::DataProvider, "massive")
                     .expect("static Massive participant"),
                 instruments,
+                venues: Vec::new(),
             },
             next_cursor: (!complete).then(|| next_offset.to_string()),
             complete,
@@ -246,6 +248,7 @@ fn normalize_quote(
     window: &HistoricalWindow,
 ) -> Result<MarketQuote, IntegrationError> {
     Ok(MarketQuote {
+        venue: Default::default(),
         symbol: window.symbol.clone(),
         bid_price: row.bid_price.as_deref().map(parse).transpose()?,
         bid_quantity: row.bid_size.as_deref().map(parse_quantity).transpose()?,

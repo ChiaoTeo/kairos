@@ -64,13 +64,30 @@ impl ExecutionLeg {
         instrument_id: impl Into<String>,
         side: OrderSide,
         target_quantity: Quantity,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, IntentError> {
         let value = Self {
-            leg_id: LegId::new(leg_id.into()).map_err(|error| error.to_string())?,
-            account_id: AccountId::new(account_id.into()).map_err(|error| error.to_string())?,
-            segment_key: SegmentKey::new(segment_key.into()).map_err(|error| error.to_string())?,
-            instrument_id: InstrumentId::new(instrument_id.into())
-                .map_err(|error| format!("invalid instrument_id: {error}"))?,
+            leg_id: LegId::new(leg_id.into()).map_err(|source| IntentError::InvalidSemantic {
+                field: "leg_id",
+                source,
+            })?,
+            account_id: AccountId::new(account_id.into()).map_err(|source| {
+                IntentError::InvalidSemantic {
+                    field: "account_id",
+                    source,
+                }
+            })?,
+            segment_key: SegmentKey::new(segment_key.into()).map_err(|source| {
+                IntentError::InvalidSemantic {
+                    field: "segment_key",
+                    source,
+                }
+            })?,
+            instrument_id: InstrumentId::new(instrument_id.into()).map_err(|source| {
+                IntentError::InvalidSemantic {
+                    field: "instrument_id",
+                    source,
+                }
+            })?,
             market_id: None,
             side,
             target_quantity,
@@ -86,12 +103,13 @@ impl ExecutionLeg {
         &mut self,
         next: LegLifecycle,
         reason: impl Into<String>,
-    ) -> Result<(), String> {
+    ) -> Result<(), IntentError> {
         if self.lifecycle != next && !self.lifecycle.can_transition_to(next) {
-            return Err(format!(
-                "invalid execution leg transition: {:?} -> {:?}",
-                self.lifecycle, next
-            ));
+            return Err(IntentError::InvalidLegTransition {
+                leg_id: self.leg_id.clone(),
+                from: self.lifecycle,
+                to: next,
+            });
         }
         self.lifecycle = next;
         self.reason = reason.into();

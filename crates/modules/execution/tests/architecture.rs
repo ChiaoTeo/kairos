@@ -56,6 +56,17 @@ fn public_boundaries_do_not_expose_decimal_storage_parts() {
 }
 
 #[test]
+fn execution_queries_reference_instead_of_caching_a_catalog_snapshot() {
+    let source = rust_source(&root().join("src"));
+    assert!(!source.contains("ExecutionReferenceSnapshot"));
+    assert!(!source.contains("reference_snapshot"));
+    assert!(source.contains("ReferenceCatalog"));
+    assert!(source.contains(".read_session("));
+    assert!(source.contains(".resolve_market("));
+    assert!(!source.contains(".market_catalog("));
+}
+
+#[test]
 fn execution_has_no_cross_provider_channel_aliases() {
     for path in rust_files(&root().join("src")) {
         let source = fs::read_to_string(&path).unwrap();

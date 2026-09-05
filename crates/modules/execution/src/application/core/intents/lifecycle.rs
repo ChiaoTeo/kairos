@@ -239,11 +239,11 @@ impl ExecutionApplication {
             ExecutionAlgorithmSpec::PassiveLimit(_) => decide_passive_limit(&run, input),
             ExecutionAlgorithmSpec::MakerTakerHedge(_) => decide_maker_taker_hedge(&run, input),
         }
-        .map_err(ExecutionError::Invalid)?;
+        .map_err(ExecutionError::Algorithm)?;
         let actions = self
             .actor
             .apply_algorithm_decision(intent_id, decision)
-            .map_err(ExecutionError::Invalid)?;
+            .map_err(ExecutionError::Algorithm)?;
         let action_id = actions
             .into_iter()
             .find_map(|action| match action.kind {
@@ -277,7 +277,7 @@ impl ExecutionApplication {
                 &due.action_id,
                 AlgorithmActionStatus::Completed,
             )
-            .map_err(ExecutionError::Invalid)?;
+            .map_err(ExecutionError::Algorithm)?;
         if due.execution_style == AlgorithmExecutionStyle::UnwindImmediate {
             self.actor
                 .attach_intent_algorithm_order(
@@ -286,7 +286,7 @@ impl ExecutionApplication {
                         .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
                     order.order_id.as_str(),
                 )
-                .map_err(ExecutionError::Invalid)?;
+                .map_err(ExecutionError::Intent)?;
         } else {
             self.attach_plan_order(&due.intent_id, &due.leg_id, &order.order_id)?;
         }
@@ -341,7 +341,7 @@ impl ExecutionApplication {
                     AlgorithmActionStatus::Failed
                 },
             )
-            .map_err(ExecutionError::Invalid)?;
+            .map_err(ExecutionError::Algorithm)?;
         if self
             .actor
             .order_map()
@@ -355,7 +355,7 @@ impl ExecutionApplication {
                             .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
                         due.request.order_id.as_str(),
                     )
-                    .map_err(ExecutionError::Invalid)?;
+                    .map_err(ExecutionError::Intent)?;
             } else {
                 self.attach_plan_order(&due.intent_id, &due.leg_id, &due.request.order_id)?;
             }
@@ -368,7 +368,7 @@ impl ExecutionApplication {
                 .collect::<Vec<_>>();
             self.actor
                 .synchronize_algorithm_run(due.intent_id.as_str(), &orders, false)
-                .map_err(ExecutionError::Invalid)?;
+                .map_err(ExecutionError::Algorithm)?;
         }
         if due.execution_style == AlgorithmExecutionStyle::TakerImmediate
             && !matches!(error, ExecutionError::Indeterminate(_))
@@ -652,7 +652,7 @@ impl ExecutionApplication {
         let (event, state) = self
             .actor
             .apply_intent_event(event)
-            .map_err(ExecutionError::Invalid)?;
+            .map_err(ExecutionError::Intent)?;
         let snapshot = self.snapshot();
         if let Some(store) = self.store.as_mut() {
             store
@@ -717,7 +717,7 @@ impl ExecutionApplication {
                 &orders,
                 !state.pending_orders.is_empty() || state.pending_quote_refresh.is_some(),
             )
-            .map_err(ExecutionError::Invalid)?;
+            .map_err(ExecutionError::Algorithm)?;
         let has_pending = self.actor.intent(intent_id).is_some_and(|value| {
             !value.pending_orders.is_empty() || value.pending_quote_refresh.is_some()
         });
@@ -870,7 +870,7 @@ impl ExecutionApplication {
     ) -> Result<(), ExecutionError> {
         self.actor
             .attach_intent_plan_order(intent_id, leg_id, order_id)
-            .map_err(ExecutionError::Invalid)
+            .map_err(ExecutionError::Intent)
     }
 
     pub(super) fn refresh_plan_progress(
@@ -880,6 +880,6 @@ impl ExecutionApplication {
     ) -> Result<(), ExecutionError> {
         self.actor
             .refresh_intent_plan_progress(intent_id, orders)
-            .map_err(ExecutionError::Invalid)
+            .map_err(ExecutionError::Intent)
     }
 }

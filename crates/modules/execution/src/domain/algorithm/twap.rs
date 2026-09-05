@@ -1,21 +1,22 @@
 use super::{
-    AlgorithmActionKind, AlgorithmDecision, AlgorithmExecutionStyle, AlgorithmInput,
-    AlgorithmLegLifecycle, AlgorithmRun, AlgorithmRunStatus, ExecutionAlgorithmSpec,
+    AlgorithmActionKind, AlgorithmDecision, AlgorithmError, AlgorithmExecutionStyle,
+    AlgorithmInput, AlgorithmInvariant, AlgorithmLegLifecycle, AlgorithmRun, AlgorithmRunStatus,
+    ExecutionAlgorithmSpec,
 };
 
 pub fn decide_twap(
     run: &AlgorithmRun,
     mut input: AlgorithmInput,
-) -> Result<AlgorithmDecision, String> {
+) -> Result<AlgorithmDecision, AlgorithmError> {
     let ExecutionAlgorithmSpec::Twap(spec) = &run.spec else {
-        return Err("TWAP decision received a different algorithm spec".into());
+        return Err(AlgorithmError::SpecMismatch { expected: "TWAP" });
     };
     run.validate()?;
     if run
         .last_decision_at
         .is_some_and(|current| input.business_time < current)
     {
-        return Err("algorithm business time cannot move backwards".into());
+        return Err(AlgorithmError::BusinessTimeRegression);
     }
     if matches!(
         run.status,
@@ -34,10 +35,9 @@ pub fn decide_twap(
             run.next_wake_at,
         ));
     }
-    let leg = run
-        .legs
-        .first()
-        .ok_or_else(|| "TWAP run has no leg".to_string())?;
+    let leg = run.legs.first().ok_or_else(|| AlgorithmError::MissingLeg {
+        leg_id: spec.leg_id.to_string(),
+    })?;
     if leg.lifecycle == AlgorithmLegLifecycle::ReconciliationRequired {
         return Ok(AlgorithmDecision {
             expected_sequence: run.decision_sequence,
@@ -100,9 +100,13 @@ pub fn decide_twap(
             candidate.leg_id == spec.leg_id
                 && candidate.execution_style == AlgorithmExecutionStyle::TwapSlice
         })
-        .ok_or_else(|| "a due TWAP slice requires one ready child".to_string())?;
+        .ok_or(AlgorithmError::invariant(
+            AlgorithmInvariant::MissingReadyTwapChild,
+        ))?;
     if candidate.quantity.is_zero() || candidate.quantity > leg.remaining_uncommitted()? {
-        return Err("TWAP slice exceeds the leg's remaining uncommitted quantity".into());
+        return Err(AlgorithmError::invariant(
+            AlgorithmInvariant::ChildExceedsLegTarget,
+        ));
     }
     let next_slice = (slice_index as u32).saturating_add(1);
     Ok(AlgorithmDecision {

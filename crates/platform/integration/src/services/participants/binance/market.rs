@@ -77,6 +77,7 @@ pub(crate) fn quote(
     row: &Value,
 ) -> Result<MarketQuote, IntegrationError> {
     Ok(MarketQuote {
+        venue: Default::default(),
         symbol: symbol.clone(),
         bid_price: parse(row.get("bidPrice"))?,
         bid_quantity: parse(row.get("bidQty"))?,
@@ -92,6 +93,7 @@ pub(crate) fn equity_quote(
     row: &Value,
 ) -> Result<MarketQuote, IntegrationError> {
     Ok(MarketQuote {
+        venue: Default::default(),
         symbol: symbol.clone(),
         bid_price: parse(row.get("bidPrice"))?,
         bid_quantity: parse(row.get("bidSize"))?,
@@ -242,12 +244,9 @@ pub(crate) fn derivative_instruments(
                     .map(Currency::new)
                     .transpose()
                     .map_err(payload)?,
-                settlement_currency: row
-                    .get("marginAsset")
-                    .and_then(Value::as_str)
-                    .map(Currency::new)
-                    .transpose()
-                    .map_err(payload)?,
+                // exchangeInfo identifies collateral here, not settlement.
+                // This generic parser has no product-specific settlement proof.
+                settlement_currency: None,
                 underlying: row
                     .get("underlying")
                     .and_then(Value::as_str)
@@ -288,6 +287,28 @@ pub(crate) fn derivative_instruments(
         })
         .collect()
 }
+#[cfg(test)]
+mod settlement_tests {
+    #[test]
+    fn generic_derivative_parser_does_not_treat_margin_as_settlement() {
+        for margin in ["USDT", "BTC"] {
+            let payload = serde_json::json!({"symbols": [{
+                "symbol": "BTCUSDT", "baseAsset": "BTC", "quoteAsset": "USDT",
+                "marginAsset": margin, "status": "TRADING"
+            }]});
+            let instruments =
+                super::derivative_instruments(&payload, crate::ExternalInstrumentKind::Perpetual)
+                    .unwrap();
+            assert_eq!(instruments.len(), 1);
+            assert_eq!(
+                instruments[0].quote_currency.as_ref().unwrap().as_str(),
+                "USDT"
+            );
+            assert!(instruments[0].settlement_currency.is_none());
+        }
+    }
+}
+
 fn levels(
     value: Option<&Value>,
 ) -> Result<

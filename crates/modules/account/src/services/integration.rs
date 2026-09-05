@@ -5,7 +5,9 @@
 //! with another public protocol hierarchy.
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
+use std::path::Path;
+#[cfg(test)]
+use std::sync::Arc;
 
 use kairos_conflux::{
     AccountQuery, BinanceCoinMRestConnection, BinanceFundingRestConnection,
@@ -28,11 +30,7 @@ use crate::domain::{
 
 #[derive(Clone, Default)]
 pub(crate) struct AccountInstrumentResolver {
-    snapshot: Arc<Mutex<Option<kairos_reference_contract::AccountReferenceSnapshot>>>,
-    cache: Arc<
-        Mutex<BTreeMap<String, (InstrumentId, Option<kairos_primitives::reference::MarketId>)>>,
-    >,
-    cache_generation: Arc<Mutex<Option<kairos_primitives::time::Generation>>>,
+    catalog: Option<kairos_reference_contract::ReferenceCatalog>,
     #[cfg(test)]
     fixture_markets: Arc<Vec<kairos_reference_contract::Market>>,
     #[cfg(test)]
@@ -40,67 +38,21 @@ pub(crate) struct AccountInstrumentResolver {
 }
 
 impl AccountInstrumentResolver {
-    pub(crate) fn update_reference_snapshot(
-        &self,
-        snapshot: kairos_reference_contract::AccountReferenceSnapshot,
-    ) -> Result<(), String> {
-        let generation = snapshot.generation;
-        *self
-            .snapshot
-            .lock()
-            .map_err(|_| "Reference identity snapshot lock poisoned".to_string())? = Some(snapshot);
-        let mut cached_generation = self
-            .cache_generation
-            .lock()
-            .map_err(|_| "Reference identity cache generation lock poisoned".to_string())?;
-        if *cached_generation != Some(generation) {
-            self.cache
-                .lock()
-                .map_err(|_| "Reference identity cache lock poisoned".to_string())?
-                .clear();
-            *cached_generation = Some(generation);
-        }
-        Ok(())
+    pub(crate) fn from_database(path: impl AsRef<Path>) -> Result<Self, String> {
+        Ok(Self {
+            catalog: Some(
+                kairos_reference_contract::ReferenceCatalog::open(path)
+                    .map_err(|error| error.to_string())?,
+            ),
+            ..Default::default()
+        })
     }
 
     fn resolve(
         &self,
         provider: &ParticipantInstrumentRef,
     ) -> Result<(InstrumentId, Option<kairos_primitives::reference::MarketId>), String> {
-        let key = format!(
-            "{}|{}|{}",
-            provider.participant.id.to_ascii_lowercase(),
-            provider
-                .instrument_type
-                .as_ref()
-                .map(|value| value.as_str())
-                .unwrap_or_default()
-                .to_ascii_lowercase(),
-            provider.source_symbol.as_str().to_ascii_uppercase(),
-        );
-        if let Some(value) = self
-            .cache
-            .lock()
-            .map_err(|_| "Reference identity cache lock poisoned".to_string())?
-            .get(&key)
-            .cloned()
-        {
-            return Ok(value);
-        }
-
-        let resolved = self.resolve_uncached(provider)?;
-        if self
-            .snapshot
-            .lock()
-            .map_err(|_| "Reference identity snapshot lock poisoned".to_string())?
-            .is_some()
-        {
-            self.cache
-                .lock()
-                .map_err(|_| "Reference identity cache lock poisoned".to_string())?
-                .insert(key, resolved.clone());
-        }
-        Ok(resolved)
+        self.resolve_uncached(provider)
     }
 
     fn resolve_uncached(
@@ -108,7 +60,48 @@ impl AccountInstrumentResolver {
         provider: &ParticipantInstrumentRef,
     ) -> Result<(InstrumentId, Option<kairos_primitives::reference::MarketId>), String> {
         let symbol = provider.source_symbol.as_str();
-        let (markets, instruments) = self.identity_snapshot()?;
+        if !provider.participant.id.eq_ignore_ascii_case("ibkr") {
+            if let Some(catalog) = self.catalog.as_ref() {
+                let product = provider
+                    .instrument_type
+                    .as_ref()
+                    .map(|value| value.as_str())
+                    .unwrap_or_default();
+                if product.is_empty() {
+                    return Err(identity_resolution_error(provider, 0));
+                }
+                let session = catalog.read_session().map_err(|error| error.to_string())?;
+                let response = session
+                    .resolve_participant_symbol(
+                        &kairos_reference_contract::ParticipantSymbolResolutionQuery {
+                            participant: kairos_primitives::market::Provider::new(
+                                provider.participant.id.clone(),
+                            )
+                            .map_err(|error| error.to_string())?,
+                            product: product.to_ascii_lowercase(),
+                            source_symbol: provider.source_symbol.clone(),
+                            instrument_kind: None,
+                            coverage_scope: None,
+                        },
+                    )
+                    .map_err(|error| error.to_string())?;
+                let [resolved] = response.matches.as_slice() else {
+                    return Err(format!(
+                        "{}; Reference conclusion is {:?}",
+                        identity_resolution_error(provider, response.matches.len()),
+                        response.evidence.conclusion
+                    ));
+                };
+                return Ok((
+                    resolved.instrument.instrument_id.clone(),
+                    resolved
+                        .market
+                        .as_ref()
+                        .map(|market| market.market_id.clone()),
+                ));
+            }
+        }
+        let (markets, instruments) = self.identity_records(provider)?;
         if provider.participant.id.eq_ignore_ascii_case("ibkr") {
             let matches = instruments
                 .iter()
@@ -153,8 +146,9 @@ impl AccountInstrumentResolver {
         Ok((market.instrument_id.clone(), Some(market.market_id.clone())))
     }
 
-    fn identity_snapshot(
+    fn identity_records(
         &self,
+        provider: &ParticipantInstrumentRef,
     ) -> Result<
         (
             Vec<kairos_reference_contract::Market>,
@@ -162,13 +156,32 @@ impl AccountInstrumentResolver {
         ),
         String,
     > {
-        if let Some(snapshot) = self
-            .snapshot
-            .lock()
-            .map_err(|_| "Reference identity snapshot lock poisoned".to_string())?
-            .clone()
-        {
-            return Ok((snapshot.markets, snapshot.instruments));
+        if let Some(catalog) = self.catalog.as_ref() {
+            if provider.participant.id.eq_ignore_ascii_case("ibkr") {
+                let session = catalog.read_session().map_err(|error| error.to_string())?;
+                let instruments = session
+                    .instruments(&kairos_reference_contract::InstrumentSearchQuery {
+                        symbol: Some(
+                            kairos_primitives::reference::Symbol::new(
+                                provider.source_symbol.as_str(),
+                            )
+                            .map_err(|error| error.to_string())?,
+                        ),
+                        instrument_type: Some(kairos_primitives::reference::InstrumentKind::Equity),
+                        active_only: true,
+                        page: kairos_reference_contract::ReferencePage {
+                            limit: Some(2),
+                            offset: 0,
+                        },
+                        ..Default::default()
+                    })
+                    .map_err(|error| error.to_string())?;
+                return Ok((Vec::new(), instruments));
+            }
+            return Err(format!(
+                "Reference has no participant catalog resolver for {}",
+                provider.participant.id
+            ));
         }
         #[cfg(test)]
         {

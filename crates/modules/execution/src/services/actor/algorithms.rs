@@ -12,36 +12,43 @@ use crate::domain::{
 };
 
 impl ExecutionActor {
-    pub(crate) fn restore_algorithm_runs(&mut self, runs: Vec<AlgorithmRun>) -> Result<(), String> {
+    pub(crate) fn restore_algorithm_runs(
+        &mut self,
+        runs: Vec<AlgorithmRun>,
+    ) -> Result<(), AlgorithmError> {
         let mut restored = BTreeMap::new();
         for run in runs {
             run.validate()?;
             self.validate_algorithm_run_owner(&run)?;
             if restored.insert(run.intent_id.to_string(), run).is_some() {
-                return Err("multiple algorithm runs reference the same intent".into());
+                return Err(AlgorithmError::invariant(
+                    AlgorithmInvariant::MultipleRunsForIntent,
+                ));
             }
         }
         self.algorithm_runs = restored;
         Ok(())
     }
 
-    pub(crate) fn insert_algorithm_run(&mut self, run: AlgorithmRun) -> Result<(), String> {
+    pub(crate) fn insert_algorithm_run(&mut self, run: AlgorithmRun) -> Result<(), AlgorithmError> {
         run.validate()?;
         self.validate_algorithm_run_owner(&run)?;
         if self.algorithm_runs.contains_key(run.intent_id.as_str()) {
-            return Err("intent already has an algorithm run".into());
+            return Err(AlgorithmError::invariant(
+                AlgorithmInvariant::MultipleRunsForIntent,
+            ));
         }
         self.algorithm_runs.insert(run.intent_id.to_string(), run);
         self.generation = self.generation.saturating_add(1);
         Ok(())
     }
 
-    fn validate_algorithm_run_owner(&self, run: &AlgorithmRun) -> Result<(), String> {
+    fn validate_algorithm_run_owner(&self, run: &AlgorithmRun) -> Result<(), AlgorithmError> {
         let state = self.intents.get(run.intent_id.as_str()).ok_or_else(|| {
-            format!(
-                "algorithm run {} references missing intent {}",
-                run.algorithm_run_id, run.intent_id
-            )
+            AlgorithmError::MissingOwnerIntent {
+                run_id: run.algorithm_run_id.to_string(),
+                intent_id: run.intent_id.to_string(),
+            }
         })?;
         for run_leg in &run.legs {
             let Some(benchmark) = run_leg.benchmark.as_ref() else {
@@ -55,18 +62,14 @@ impl ExecutionActor {
                         .iter()
                         .find(|plan_leg| plan_leg.leg_id == run_leg.leg_id)
                 })
-                .ok_or_else(|| {
-                    format!(
-                        "benchmarked algorithm leg {} has no owner plan leg",
-                        run_leg.leg_id
-                    )
+                .ok_or_else(|| AlgorithmError::MissingLeg {
+                    leg_id: run_leg.leg_id.to_string(),
                 })?;
             if plan_leg.instrument_id != benchmark.instrument_id
                 || plan_leg.market_id.as_ref() != Some(&benchmark.market_id)
             {
-                return Err(format!(
-                    "algorithm leg {} benchmark does not match its owner plan",
-                    run_leg.leg_id
+                return Err(AlgorithmError::invariant(
+                    AlgorithmInvariant::BenchmarkOwnerMismatch,
                 ));
             }
         }
@@ -85,11 +88,13 @@ impl ExecutionActor {
         &mut self,
         intent_id: &str,
         decision: AlgorithmDecision,
-    ) -> Result<Vec<AlgorithmAction>, String> {
-        let run = self
-            .algorithm_runs
-            .get_mut(intent_id)
-            .ok_or_else(|| "intent has no algorithm run".to_string())?;
+    ) -> Result<Vec<AlgorithmAction>, AlgorithmError> {
+        let run =
+            self.algorithm_runs
+                .get_mut(intent_id)
+                .ok_or_else(|| AlgorithmError::MissingRun {
+                    intent_id: intent_id.to_owned(),
+                })?;
         let previous_actions = run.actions.len();
         run.apply_decision(decision)?;
         let actions = run.actions[previous_actions..].to_vec();
@@ -102,17 +107,19 @@ impl ExecutionActor {
         intent_id: &str,
         action_id: &str,
         status: AlgorithmActionStatus,
-    ) -> Result<(), String> {
-        let run = self
-            .algorithm_runs
-            .get_mut(intent_id)
-            .ok_or_else(|| "intent has no algorithm run".to_string())?;
+    ) -> Result<(), AlgorithmError> {
+        let run =
+            self.algorithm_runs
+                .get_mut(intent_id)
+                .ok_or_else(|| AlgorithmError::MissingRun {
+                    intent_id: intent_id.to_owned(),
+                })?;
         run.set_action_status(action_id, status)?;
         self.generation = self.generation.saturating_add(1);
         Ok(())
     }
 
-    pub(crate) fn synchronize_all_algorithm_runs(&mut self) -> Result<bool, String> {
+    pub(crate) fn synchronize_all_algorithm_runs(&mut self) -> Result<bool, AlgorithmError> {
         let intent_ids = self.algorithm_runs.keys().cloned().collect::<Vec<_>>();
         let mut changed = false;
         for intent_id in intent_ids {
@@ -172,7 +179,7 @@ impl ExecutionActor {
         intent_id: &str,
         orders: &[ExecutionOrder],
         has_pending_work: bool,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, AlgorithmError> {
         let leader_leg_id = self
             .algorithm_runs
             .get(intent_id)
@@ -425,7 +432,7 @@ fn realized_execution_quality(
     run: &AlgorithmRun,
     orders: &[ExecutionOrder],
     fills: &[ExecutionFill],
-) -> Result<AlgorithmExecutionQuality, String> {
+) -> Result<AlgorithmExecutionQuality, AlgorithmError> {
     let unwind_order_ids = run
         .actions
         .iter()
@@ -505,12 +512,15 @@ fn realized_execution_quality(
                 let implementation_shortfall = if filled_quantity.is_zero() {
                     None
                 } else {
-                    let side = leg_orders
-                        .first()
-                        .map(|order| order.side)
-                        .ok_or_else(|| "filled benchmark leg has no order".to_string())?;
+                    let side = leg_orders.first().map(|order| order.side).ok_or(
+                        AlgorithmError::invariant(
+                            AlgorithmInvariant::FilledBenchmarkLegWithoutOrder,
+                        ),
+                    )?;
                     if leg_orders.iter().any(|order| order.side != side) {
-                        return Err("algorithm leg contains mixed order sides".to_string());
+                        return Err(AlgorithmError::invariant(
+                            AlgorithmInvariant::MixedOrderSides,
+                        ));
                     }
                     Some(match side {
                         OrderSide::Buy => gross_notional.checked_sub(benchmark_notional)?,
@@ -530,10 +540,12 @@ fn realized_execution_quality(
             .transpose()?;
         quality_legs.push(AlgorithmLegExecutionQuality {
             leg_id: leg.leg_id.clone(),
-            order_count: u64::try_from(leg_orders.len())
-                .map_err(|_| "algorithm order count overflow".to_string())?,
-            fill_count: u64::try_from(leg_fills.len())
-                .map_err(|_| "algorithm fill count overflow".to_string())?,
+            order_count: u64::try_from(leg_orders.len()).map_err(|_| AlgorithmError::Overflow {
+                operation: "algorithm order count",
+            })?,
+            fill_count: u64::try_from(leg_fills.len()).map_err(|_| AlgorithmError::Overflow {
+                operation: "algorithm fill count",
+            })?,
             cancel_attempt_count: leg_orders.iter().try_fold(0_u64, |total, order| {
                 let count = order
                     .attempts
@@ -543,11 +555,12 @@ fn realized_execution_quality(
                     })
                     .count();
                 total
-                    .checked_add(
-                        u64::try_from(count)
-                            .map_err(|_| "algorithm cancel count overflow".to_string())?,
-                    )
-                    .ok_or_else(|| "algorithm cancel count overflow".to_string())
+                    .checked_add(u64::try_from(count).map_err(|_| AlgorithmError::Overflow {
+                        operation: "algorithm cancel count",
+                    })?)
+                    .ok_or(AlgorithmError::Overflow {
+                        operation: "algorithm cancel count",
+                    })
             })?,
             filled_quantity,
             gross_notional,

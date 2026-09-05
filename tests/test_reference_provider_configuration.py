@@ -22,7 +22,7 @@ def _workspace(tmp_path, monkeypatch):
     return workspace
 
 
-def test_massive_configuration_writes_connection_and_reference_binding_only(
+def test_massive_configuration_writes_only_the_integration_connection(
     tmp_path, monkeypatch
 ) -> None:
     workspace = _workspace(tmp_path, monkeypatch)
@@ -37,10 +37,7 @@ def test_massive_configuration_writes_connection_and_reference_binding_only(
     assert configured["verification_status"] == "pending"
     assert configured["shared_by"] == ["Reference"]
     manifest = tomllib.loads(workspace.paths.manifest.read_text())
-    assert manifest["reference"]["providers"]["massive"] == {
-        "enabled": True,
-        "connection_id": "massive",
-    }
+    assert "reference" not in manifest or "providers" not in manifest["reference"]
     assert "market" not in manifest or "providers" not in manifest["market"]
     connection = tomllib.loads(
         (workspace.paths.provider_connections_root() / "massive.toml").read_text()

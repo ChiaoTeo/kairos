@@ -124,9 +124,35 @@ fn workspace_configuration_hides_internal_source_bindings() {
         "sync_policy",
         "provider_product",
         "provider_segment",
+        "ReferenceProviders",
+        "credential_id",
+        "endpoint",
     ] {
         assert!(!config.contains(forbidden));
     }
+}
+
+#[test]
+fn v3_contract_separates_venues_memberships_and_coverage() {
+    let model = source("contract/src/catalog/model.rs");
+    let sqlite = source("contract/src/catalog/sqlite.rs");
+    for required in [
+        "pub struct Venue",
+        "pub struct VenueListing",
+        "pub struct VenueMarket",
+        "pub struct ProviderCatalogMembership",
+        "pub struct ReferenceCoverage",
+        "pub struct ReferenceQueryEvidence",
+        "pub fn search_venues",
+        "pub fn search_venue_markets",
+    ] {
+        assert!(
+            model.contains(required) || sqlite.contains(required),
+            "{required}"
+        );
+    }
+    assert!(model.contains("listing_venue_id"));
+    assert!(model.contains("execution_venue_id"));
 }
 
 #[test]
@@ -139,6 +165,25 @@ fn sqlite_is_the_only_current_fact_store() {
     assert!(!server.contains("ReferenceCurrentViewPublisher"));
     assert!(!server.contains("current_view_publisher"));
     assert!(!actor.contains("dyn CatalogStore"));
+}
+
+#[test]
+fn public_contract_has_no_catalog_or_consumer_snapshots() {
+    for path in rust_files(&root().join("contract/src")) {
+        let source = std::fs::read_to_string(&path).unwrap();
+        for forbidden in [
+            "ReferenceCatalogSnapshot",
+            "MarketReferenceSnapshot",
+            "ExecutionReferenceSnapshot",
+            "AccountReferenceSnapshot",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "{forbidden} in {}",
+                path.display()
+            );
+        }
+    }
 }
 
 #[test]

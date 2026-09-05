@@ -11,7 +11,7 @@ use kairos_market_contract::{
     MarketViewKind,
 };
 use kairos_primitives::market::{ObservationKind, Provider};
-use kairos_primitives::reference::{InstrumentId, MarketId};
+use kairos_primitives::reference::{InstrumentId, MarketId, VenueId};
 use kairos_primitives::runtime::InstanceIdentity;
 use serde::Serialize;
 
@@ -78,6 +78,8 @@ pub struct MarketQuoteResult {
     pub ask_price: Option<MarketDecimalResult>,
     pub ask_quantity: Option<MarketDecimalResult>,
     pub bid_venue_code: Option<String>,
+    pub bid_venue_id: Option<VenueId>,
+    pub ask_venue_id: Option<VenueId>,
     pub ask_venue_code: Option<String>,
     pub tape: u32,
     pub source_observed_at_unix_nanos: u64,
@@ -320,6 +322,8 @@ impl ConnectedMarketApplication {
                     ask_price: decimal_result(quote.ask_price()),
                     ask_quantity: decimal_result(quote.ask_quantity()),
                     bid_venue_code: quote.bid_venue_code().map(str::to_owned),
+                    bid_venue_id: quote.bid_venue_id().map(VenueId::new).transpose()?,
+                    ask_venue_id: quote.ask_venue_id().map(VenueId::new).transpose()?,
                     ask_venue_code: quote.ask_venue_code().map(str::to_owned),
                     tape: quote.tape(),
                     source_observed_at_unix_nanos: quote.source_observed_at_unix_nanos(),

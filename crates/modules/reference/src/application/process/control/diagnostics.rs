@@ -258,7 +258,7 @@ fn registered_source_guidance(source: &ReferenceSourceRuntimeStatus) -> (String,
                 .as_ref()
                 .is_some_and(|value| value.as_str() == "massive")
         {
-            if source.credential_binding_present == Some(false) {
+            if source.connection_id_present == Some(false) {
                 return (
                     format!(
                         "Reference source {source_id} is registered but no credential binding is configured{definition_hint}{error_suffix}"
@@ -289,7 +289,7 @@ fn registered_source_guidance(source: &ReferenceSourceRuntimeStatus) -> (String,
         source.sync_policy,
         Some(ReferenceSourceSyncPolicy::FullSnapshot)
     ) {
-        if source.credential_binding_present == Some(false) {
+        if source.connection_id_present == Some(false) {
             return (
                 format!(
                     "Reference source {source_id} is registered but no credential binding is configured{definition_hint}{error_suffix}"
@@ -328,8 +328,8 @@ fn source_definition_hint(source: &ReferenceSourceRuntimeStatus) -> String {
             fields.push(format!("scope_id={scope_id}"));
         }
     }
-    if let Some(present) = source.credential_binding_present {
-        fields.push(format!("credential_binding_present={present}"));
+    if let Some(present) = source.connection_id_present {
+        fields.push(format!("connection_id_present={present}"));
     }
     if fields.is_empty() {
         String::new()
@@ -388,7 +388,7 @@ mod tests {
             desired_state: None,
             sync_policy: None,
             scope: None,
-            credential_binding_present: None,
+            connection_id_present: None,
             phase,
             progress: ReferenceSourceProgress {
                 kind: ReferenceSourceProgressKind::Unknown,
@@ -601,7 +601,7 @@ mod tests {
             kind: ReferenceSourceScopeKind::UnderlyingInstrument,
             id: Some("instrument:equity:US:SPY:common".into()),
         });
-        status.credential_binding_present = Some(true);
+        status.connection_id_present = Some(true);
 
         let diagnostics = runtime_diagnostics(&[status], 0, None, &catalog_integrity_ok());
 
@@ -642,7 +642,7 @@ mod tests {
             kind: ReferenceSourceScopeKind::Global,
             id: None,
         });
-        status.credential_binding_present = Some(false);
+        status.connection_id_present = Some(false);
 
         let diagnostics = runtime_diagnostics(&[status], 0, None, &catalog_integrity_ok());
 
@@ -657,7 +657,7 @@ mod tests {
         assert!(
             diagnostics[0]
                 .message
-                .contains("credential_binding_present=false")
+                .contains("connection_id_present=false")
         );
         assert!(
             diagnostics[0]

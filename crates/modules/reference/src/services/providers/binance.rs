@@ -79,13 +79,13 @@ impl ReferenceSource for BinanceSpotSource {
 
     async fn fetch_catalog_with_connections(
         &mut self,
-        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        connections: &kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<ProviderCatalog> {
         let facts = match &mut self.connection {
             ConnectionRef(key) => {
                 connections
                     .binance_spot_rest
-                    .get(key)
+                    .get_shared(key)
                     .map_err(|error| ReferenceError::Provider(error.to_string()))?
                     .fetch_instruments()
                     .await
@@ -104,13 +104,13 @@ impl ReferenceSource for BinanceOptionsSource {
 
     async fn fetch_catalog_with_connections(
         &mut self,
-        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        connections: &kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<ProviderCatalog> {
         let facts = match &mut self.connection {
             ConnectionRef(key) => {
                 connections
                     .binance_options_rest
-                    .get(key)
+                    .get_shared(key)
                     .map_err(|error| ReferenceError::Provider(error.to_string()))?
                     .fetch_instruments()
                     .await
@@ -129,13 +129,13 @@ impl ReferenceSource for BinanceDerivativesSource {
 
     async fn fetch_catalog_with_connections(
         &mut self,
-        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        connections: &kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<ProviderCatalog> {
         let facts = match &mut self.connection {
             BinanceDerivativesFamily::UsdM(ConnectionRef(key)) => {
                 connections
                     .binance_usdm_rest
-                    .get(key)
+                    .get_shared(key)
                     .map_err(|error| ReferenceError::Provider(error.to_string()))?
                     .fetch_instruments()
                     .await
@@ -143,7 +143,7 @@ impl ReferenceSource for BinanceDerivativesSource {
             BinanceDerivativesFamily::CoinM(ConnectionRef(key)) => {
                 connections
                     .binance_coinm_rest
-                    .get(key)
+                    .get_shared(key)
                     .map_err(|error| ReferenceError::Provider(error.to_string()))?
                     .fetch_instruments()
                     .await
@@ -162,13 +162,13 @@ impl ReferenceSource for BinanceEquitySource {
 
     async fn fetch_catalog_with_connections(
         &mut self,
-        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        connections: &kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<ProviderCatalog> {
         let facts = match &mut self.connection {
             ConnectionRef(key) => {
                 connections
                     .binance_stocks_rest
-                    .get(key)
+                    .get_shared(key)
                     .map_err(|error| ReferenceError::Provider(error.to_string()))?
                     .fetch_instruments()
                     .await
@@ -277,6 +277,10 @@ fn append_binance_instrument(
         .as_ref()
         .map(|value| value.as_str().to_ascii_uppercase())
         .ok_or_else(|| ReferenceError::Provider("Binance quote currency is missing".into()))?;
+    let settlement = value
+        .settlement_currency
+        .as_ref()
+        .map(|value| value.as_str().to_ascii_uppercase());
     for (code, asset_class) in [
         (
             &base,
@@ -287,7 +291,10 @@ fn append_binance_instrument(
             },
         ),
         (&quote, "crypto"),
-    ] {
+    ]
+    .into_iter()
+    .chain(settlement.as_ref().map(|code| (code, "crypto")))
+    {
         catalog.assets.push(Asset {
             asset_id: kairos_primitives::reference::AssetId::new(format!(
                 "asset:{asset_class}:{code}"
@@ -455,6 +462,10 @@ fn append_binance_instrument(
         instrument_id: instrument_id.clone(),
         symbol: kairos_primitives::reference::Symbol::new(canonical_symbol)?,
         instrument_type: instrument_kind,
+        settlement_asset_id: settlement
+            .as_ref()
+            .map(|code| kairos_primitives::reference::AssetId::new(format!("asset:crypto:{code}")))
+            .transpose()?,
         primary_currency_asset_id: Some(kairos_primitives::reference::AssetId::new(format!(
             "asset:crypto:{}",
             if canonical_family == "spot" {

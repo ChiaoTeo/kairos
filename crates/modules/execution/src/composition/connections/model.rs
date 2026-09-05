@@ -88,7 +88,7 @@ pub struct ExecutionInstrumentRoute {
 /// canonical Reference identity. The execution channel and order-entry symbol remain owned by
 /// the configured Execution route; Reference never supplies broker coverage.
 pub fn load_execution_routes_from_reference_markets(
-    snapshot: &kairos_reference_contract::ExecutionReferenceSnapshot,
+    catalog: &kairos_reference_contract::MarketSearchResponse,
     configured_routes: &[ExecutionConnectionOptions],
 ) -> Result<
     Vec<(
@@ -101,9 +101,9 @@ pub fn load_execution_routes_from_reference_markets(
     for configured in configured_routes {
         if !configured.instruments.is_empty() {
             for address in &configured.instruments {
-                let instrument = snapshot
+                let instrument = catalog
                     .instruments
-                    .iter()
+                    .values()
                     .find(|value| value.instrument_id == address.instrument_id)
                     .ok_or_else(|| {
                         format!(
@@ -115,7 +115,7 @@ pub fn load_execution_routes_from_reference_markets(
                     .destination_market_id
                     .as_deref()
                     .map(|market_id| {
-                        snapshot
+                        catalog
                             .markets
                             .iter()
                             .find(|market| market.market_id == market_id)
@@ -137,13 +137,19 @@ pub fn load_execution_routes_from_reference_markets(
             }
             continue;
         }
-        for market in snapshot.markets.iter().filter(|market| {
+        for market in catalog.markets.iter().filter(|market| {
+            let instrument_kind = catalog
+                .instruments
+                .get(&market.instrument_id)
+                .map(|instrument| instrument.instrument_type);
             matches!(market.status.as_str(), "active" | "trading")
-                && canonical_venue_matches_participant(&market.exchange_id, &configured.broker_id)
-                && route_product_supports_instrument_kind(
-                    &configured.execution_channel,
-                    market.instrument_kind,
+                && canonical_venue_matches_participant(
+                    market.execution_venue_id.as_str(),
+                    &configured.broker_id,
                 )
+                && instrument_kind.is_some_and(|kind| {
+                    route_product_supports_instrument_kind(&configured.execution_channel, kind)
+                })
                 && market.venue_symbol.is_some()
         }) {
             let order_entry_symbol = market
@@ -294,7 +300,10 @@ fn margin_rule(
 }
 
 fn canonical_venue_matches_participant(exchange_id: &str, broker_id: &str) -> bool {
-    let venue = exchange_id.strip_prefix("exchange:").unwrap_or(exchange_id);
+    let venue = exchange_id
+        .strip_prefix("venue:")
+        .or_else(|| exchange_id.strip_prefix("exchange:"))
+        .unwrap_or(exchange_id);
     venue.eq_ignore_ascii_case(broker_id)
         || (broker_id.eq_ignore_ascii_case("okex") && venue.eq_ignore_ascii_case("okx"))
 }

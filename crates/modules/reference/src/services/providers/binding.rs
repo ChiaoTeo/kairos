@@ -10,7 +10,7 @@ use kairos_primitives::reference::ReferenceSourceId;
 
 use super::{HyperliquidProduct, OkxProduct};
 use crate::domain::{
-    ReferenceError, ReferenceResult, ReferenceSourceDefinition, SourceCredentialBinding,
+    ReferenceError, ReferenceResult, ReferenceSourceDefinition, SourceConnectionId,
     SourceDesiredState, SourceScope, SourceSyncPolicy,
 };
 
@@ -79,12 +79,52 @@ impl ReferenceSourceBinding {
         }
     }
 
+    pub(crate) const fn product(self) -> &'static str {
+        match self {
+            Self::Binance(BinanceReferenceSource::Spot) => "spot",
+            Self::Binance(BinanceReferenceSource::UsdMFutures) => "usd-m-futures",
+            Self::Binance(BinanceReferenceSource::CoinMFutures) => "coin-m-futures",
+            Self::Binance(BinanceReferenceSource::Options) => "options",
+            Self::Binance(BinanceReferenceSource::Equity) => "equity",
+            Self::Okx(product) => product.profile_product(),
+            Self::Hyperliquid(HyperliquidProduct::Spot) => "spot",
+            Self::Hyperliquid(HyperliquidProduct::Perpetual) => "perpetual",
+            Self::Massive(MassiveReferenceSource::Equity) => "equity",
+            Self::Massive(MassiveReferenceSource::Options) => "options",
+        }
+    }
+
     pub(crate) const fn sync_policy(self) -> SourceSyncPolicy {
         match self {
             Self::Massive(MassiveReferenceSource::Equity) => SourceSyncPolicy::PagedSnapshot,
             Self::Massive(MassiveReferenceSource::Options) => SourceSyncPolicy::ScopedSnapshot,
             _ => SourceSyncPolicy::FullSnapshot,
         }
+    }
+
+    /// Business facts this adapter can establish for its declared scope.
+    /// This is capability metadata, so an empty but complete provider catalog
+    /// still proves absence inside that provider-defined scope.
+    pub(crate) fn fact_kinds(
+        self,
+    ) -> std::collections::BTreeSet<kairos_reference_contract::ReferenceFactKind> {
+        use kairos_reference_contract::ReferenceFactKind as Fact;
+
+        let mut facts = [
+            Fact::Venue,
+            Fact::Asset,
+            Fact::Instrument,
+            Fact::Listing,
+            Fact::Market,
+            Fact::ProviderCatalogMembership,
+            Fact::TradingRules,
+        ]
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+        if self == Self::Massive(MassiveReferenceSource::Equity) {
+            facts.insert(Fact::VenueIdentifierMapping);
+        }
+        facts
     }
 
     pub(crate) const fn requires_credential(self) -> bool {
@@ -182,7 +222,7 @@ impl ReferenceSourceBinding {
         self,
         scope: SourceScope,
         desired_state: SourceDesiredState,
-        credential_binding: Option<SourceCredentialBinding>,
+        connection_id: Option<SourceConnectionId>,
     ) -> ReferenceResult<ReferenceSourceDefinition> {
         if self == Self::Massive(MassiveReferenceSource::Options) {
             if !matches!(
@@ -202,18 +242,12 @@ impl ReferenceSourceBinding {
                 self.source_id()
             )));
         }
-        if credential_binding.is_some() && !self.requires_credential() {
-            return Err(ReferenceError::Invalid(format!(
-                "{} Reference source does not accept a credential binding",
-                self.source_id()
-            )));
-        }
         Ok(ReferenceSourceDefinition {
             source_id: ReferenceSourceId::new(self.source_id())?,
             provider_id: Provider::new(self.provider())?,
             scope,
             desired_state,
-            credential_binding,
+            connection_id,
             sync_policy: self.sync_policy(),
         })
     }
@@ -238,9 +272,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::{BinanceReferenceSource, MassiveReferenceSource, ReferenceSourceBinding};
-    use crate::domain::{
-        SourceCredentialBinding, SourceDesiredState, SourceScope, SourceSyncPolicy,
-    };
+    use crate::domain::{SourceConnectionId, SourceDesiredState, SourceScope, SourceSyncPolicy};
 
     #[test]
     fn supported_bindings_have_unique_owner_derived_identities() {
@@ -263,7 +295,7 @@ mod tests {
     }
 
     #[test]
-    fn advanced_binding_rejects_unsupported_scope_and_credentials() {
+    fn advanced_binding_rejects_unsupported_scope_and_accepts_connection_binding() {
         assert!(
             ReferenceSourceBinding::Okx(super::OkxProduct::Spot)
                 .definition(
@@ -273,14 +305,13 @@ mod tests {
                 )
                 .is_err()
         );
-        assert!(
-            ReferenceSourceBinding::Binance(BinanceReferenceSource::Spot)
-                .definition(
-                    SourceScope::global(),
-                    SourceDesiredState::Enabled,
-                    Some(SourceCredentialBinding::new("binance.default").unwrap()),
-                )
-                .is_err()
-        );
+        let connected = ReferenceSourceBinding::Binance(BinanceReferenceSource::Spot)
+            .definition(
+                SourceScope::global(),
+                SourceDesiredState::Enabled,
+                Some(SourceConnectionId::new("binance-default").unwrap()),
+            )
+            .unwrap();
+        assert_eq!(connected.connection_id.as_deref(), Some("binance-default"));
     }
 }

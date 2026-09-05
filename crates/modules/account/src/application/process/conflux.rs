@@ -31,7 +31,6 @@ const ACCOUNT_BUSINESS_ERROR_CODE: i32 = -31_007;
 pub(in crate::application) struct AccountConfluxState {
     refresh_interval: Duration,
     resolver: AccountInstrumentResolver,
-    reference_client_key: Option<String>,
     segments: BTreeMap<SegmentKey, SegmentSyncState>,
     identity: InstanceIdentity,
     producer_incarnation: u64,
@@ -43,7 +42,6 @@ impl Default for AccountConfluxState {
         Self {
             refresh_interval: Duration::from_secs(30),
             resolver: AccountInstrumentResolver::default(),
-            reference_client_key: None,
             segments: BTreeMap::new(),
             identity: InstanceIdentity::default(),
             producer_incarnation: kairos_workspace::ProducerIncarnation::allocate().get(),
@@ -75,10 +73,6 @@ impl AccountApplication {
             })
             .collect();
         Ok(())
-    }
-
-    pub fn configure_reference_client(&mut self, client_key: impl Into<String>) {
-        self.conflux.reference_client_key = Some(client_key.into());
     }
 
     pub fn configure_publication_identity(&mut self, identity: InstanceIdentity) {
@@ -346,7 +340,6 @@ impl AccountApplication {
             .into_iter()
             .map(|segment| (segment.segment_key.to_string(), segment))
             .collect::<BTreeMap<_, _>>();
-        self.refresh_reference_snapshot(context)?;
         let resolver = self.conflux.resolver.clone();
         let mut connections = context.connections();
         let mut fetches = Vec::new();
@@ -760,27 +753,6 @@ impl AccountApplication {
             segment.last_error.clone_from(&state.last_error);
             segment.recovery_buffer_depth = state.recovery_events.len() as u64;
         }
-    }
-
-    fn refresh_reference_snapshot(
-        &mut self,
-        context: &mut Context<'_, Self>,
-    ) -> Result<(), AccountError> {
-        let Some(client_key) = self.conflux.reference_client_key.as_deref() else {
-            return Ok(());
-        };
-        let Some(client) = context.reference_client(client_key) else {
-            return Err(AccountError::Source(format!(
-                "managed Reference client is missing: {client_key}"
-            )));
-        };
-        let snapshot = client
-            .account_snapshot()
-            .map_err(|error| AccountError::Source(error.to_string()))?;
-        self.conflux
-            .resolver
-            .update_reference_snapshot(snapshot)
-            .map_err(AccountError::Source)
     }
 }
 

@@ -7,7 +7,7 @@ mod work_log;
 mod workflow;
 
 pub(crate) use configured::{ConfiguredProviderSource, ConfiguredReferenceSource};
-pub(crate) use model::SourceUpdate;
+pub(crate) use model::{SourceChanges, SourceUpdate};
 pub(crate) use progress::{
     log_source_candidate_completed, log_source_scan_completed, log_source_scan_failed,
     log_source_scan_progress, source_runtime_progress, source_work_item,

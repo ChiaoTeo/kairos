@@ -4,9 +4,10 @@ import os
 import shutil
 import sys
 from contextlib import redirect_stderr, redirect_stdout
+from importlib.metadata import version as distribution_version
 from io import StringIO
 from pathlib import Path
-from typing import Any, Sequence, TextIO
+from typing import Any, Sequence, TextIO, TypedDict
 
 import click
 import typer
@@ -387,7 +388,19 @@ def browse(workspace: str | None = typer.Option(None, "--workspace")) -> None:
         typer.echo(str(path.relative_to(value.paths.root)))
 
 
-def _quickstart_payload() -> dict[str, object]:
+class _QuickstartStep(TypedDict):
+    step: str
+    command: str
+
+
+class _QuickstartPayload(TypedDict):
+    purpose: str
+    first_run: list[_QuickstartStep]
+    command_map: dict[str, str]
+    next_help: list[str]
+
+
+def _quickstart_payload() -> _QuickstartPayload:
     return {
         "purpose": "Get from an empty directory to a runnable backtest.",
         "first_run": [
@@ -431,7 +444,7 @@ def _quickstart_payload() -> dict[str, object]:
     }
 
 
-def _render_quickstart_text(payload: dict[str, object]) -> str:
+def _render_quickstart_text(payload: _QuickstartPayload) -> str:
     lines = [
         "KairosPy quickstart",
         "",
@@ -439,17 +452,17 @@ def _render_quickstart_text(payload: dict[str, object]) -> str:
         "",
         "First run:",
     ]
-    for index, item in enumerate(payload["first_run"], start=1):  # type: ignore[index]
-        step = item["step"]  # type: ignore[index]
-        command = item["command"]  # type: ignore[index]
+    for index, item in enumerate(payload["first_run"], start=1):
+        step = item["step"]
+        command = item["command"]
         lines.append(f"{index}. {step}")
         lines.append(f"   {command}")
     lines.extend(["", "Command map:"])
-    command_map = payload["command_map"]  # type: ignore[assignment]
-    for name, description in command_map.items():  # type: ignore[union-attr]
+    command_map = payload["command_map"]
+    for name, description in command_map.items():
         lines.append(f"- {name}: {description}")
     lines.extend(["", "Useful help:"])
-    for command in payload["next_help"]:  # type: ignore[index]
+    for command in payload["next_help"]:
         lines.append(f"- {command}")
     return "\n".join(lines)
 
@@ -469,7 +482,7 @@ def quickstart(
 @app.command("version", rich_help_panel="Advanced tools")
 def version() -> None:
     """Print the installed KairosPy version."""
-    typer.echo("kairospy 0.1.0")
+    typer.echo(f"kairospy {distribution_version('kairospy')}")
 
 
 def execute_argv(

@@ -1,4 +1,4 @@
-from .admin import NotificationAdminApplication
+from .admin import NotificationAdminApplication, notification_provider
 from .application import NotificationApplication
 from .draft import (
     NotificationDestinationDraft,
@@ -14,4 +14,5 @@ __all__ = [
     "NotificationReceipt",
     "NotificationRequest",
     "NotificationSeverity",
+    "notification_provider",
 ]

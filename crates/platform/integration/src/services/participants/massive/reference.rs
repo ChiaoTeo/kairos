@@ -5,8 +5,8 @@ use kairos_primitives::reference::Currency;
 use kairos_primitives::time::UnixNanos;
 
 use crate::{
-    ExternalInstrument, ExternalInstrumentCatalog, ExternalInstrumentKind, IntegrationError,
-    ParticipantKind, ParticipantRef,
+    ExternalInstrument, ExternalInstrumentCatalog, ExternalInstrumentKind, ExternalVenue,
+    ExternalVenueKind, IntegrationError, ParticipantKind, ParticipantRef,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -28,8 +28,19 @@ pub(crate) struct MassiveMarketRow {
     pub(crate) contract_size: Option<String>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MassiveVenueRow {
+    pub(crate) id: String,
+    pub(crate) participant_id: Option<String>,
+    pub(crate) mic: Option<String>,
+    pub(crate) operating_mic: Option<String>,
+    pub(crate) name: String,
+    pub(crate) venue_type: String,
+}
+
 pub(crate) fn normalize(
     rows: Vec<MassiveMarketRow>,
+    venues: Vec<MassiveVenueRow>,
 ) -> Result<ExternalInstrumentCatalog, IntegrationError> {
     let instruments = rows
         .into_iter()
@@ -88,6 +99,23 @@ pub(crate) fn normalize(
         participant: ParticipantRef::new(ParticipantKind::DataProvider, "massive")
             .expect("static Massive participant"),
         instruments,
+        venues: venues
+            .into_iter()
+            .map(|venue| ExternalVenue {
+                provider_identifier: venue.id,
+                participant_identifier: venue.participant_id,
+                mic: venue.mic,
+                operating_mic: venue.operating_mic,
+                name: venue.name,
+                kind: match venue.venue_type.trim().to_ascii_lowercase().as_str() {
+                    "exchange" => ExternalVenueKind::Exchange,
+                    "sip" => ExternalVenueKind::Sip,
+                    "trf" => ExternalVenueKind::TradeReportingFacility,
+                    _ => ExternalVenueKind::Unknown,
+                },
+                active: true,
+            })
+            .collect(),
     })
 }
 
@@ -98,23 +126,26 @@ mod tests {
 
     #[test]
     fn preserves_massive_venue_and_option_facts_without_canonical_ids() {
-        let facts = normalize(vec![MassiveMarketRow {
-            ticker: "O:SPY260821C00500000".into(),
-            exchange: Some("XNAS".into()),
-            market_type: "options".into(),
-            base: Some("SPY".into()),
-            quote: Some("USD".into()),
-            active: true,
-            price_tick: Some("0.01".into()),
-            amount_tick: Some("1".into()),
-            price_precision: 2,
-            amount_precision: 0,
-            underlying: Some("SPY".into()),
-            expiry_unix_nanos: Some(1_800_000_000_000_000_000),
-            strike: Some("500".into()),
-            option_right: Some("call".into()),
-            contract_size: Some("100".into()),
-        }])
+        let facts = normalize(
+            vec![MassiveMarketRow {
+                ticker: "O:SPY260821C00500000".into(),
+                exchange: Some("XNAS".into()),
+                market_type: "options".into(),
+                base: Some("SPY".into()),
+                quote: Some("USD".into()),
+                active: true,
+                price_tick: Some("0.01".into()),
+                amount_tick: Some("1".into()),
+                price_precision: 2,
+                amount_precision: 0,
+                underlying: Some("SPY".into()),
+                expiry_unix_nanos: Some(1_800_000_000_000_000_000),
+                strike: Some("500".into()),
+                option_right: Some("call".into()),
+                contract_size: Some("100".into()),
+            }],
+            Vec::new(),
+        )
         .expect("provider facts");
         let instrument = &facts.instruments[0];
         assert_eq!(instrument.kind, ExternalInstrumentKind::Option);

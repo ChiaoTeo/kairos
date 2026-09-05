@@ -157,8 +157,15 @@ fn stale_sequence_and_regressing_business_time_are_rejected() {
     let mut run = run();
     let decision = decide_immediate(&run, input(100)).unwrap();
     run.apply_decision(decision.clone()).unwrap();
-    assert!(run.apply_decision(decision).is_err());
-    assert!(decide_immediate(&run, input(99)).is_err());
+    let stale = run.apply_decision(decision).unwrap_err();
+    assert!(matches!(stale, AlgorithmError::StaleDecision { .. }));
+    assert_eq!(stale.code(), "execution.algorithm.stale_decision");
+    let regression = decide_immediate(&run, input(99)).unwrap_err();
+    assert!(matches!(regression, AlgorithmError::BusinessTimeRegression));
+    assert_eq!(
+        regression.code(),
+        "execution.algorithm.business_time_regression"
+    );
 }
 
 #[test]
@@ -166,7 +173,17 @@ fn quantity_ledger_rejects_overcommitment() {
     let mut run = run();
     run.legs[0].committed_quantity = Quantity::new(4, 0).unwrap();
     run.legs[0].filled_quantity = Quantity::new(2, 0).unwrap();
-    assert!(run.validate().is_err());
+    let error = run.validate().unwrap_err();
+    assert_eq!(
+        error.code(),
+        "execution.algorithm.invariant.leg_exceeds_target"
+    );
+    assert!(matches!(
+        error,
+        AlgorithmError::Invariant {
+            invariant: AlgorithmInvariant::LegExceedsTarget
+        }
+    ));
 }
 
 fn maker_taker_run() -> AlgorithmRun {

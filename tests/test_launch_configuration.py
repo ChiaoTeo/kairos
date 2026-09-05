@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Mapping
+from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,6 +19,7 @@ from kairospy.system.apps.launch.application import (
 from kairospy.system.apps.launch.application import (
     configuration as launch_configuration,
 )
+from kairospy.system.apps.launch.application import resource_diagnostics
 from kairospy import Kairos
 from kairospy.research.apps.data.application import DatasetRef, DatasetSetRef
 from kairospy.system.apps.launch.application.wizard import (
@@ -599,6 +603,79 @@ strategy = "strategy:Factory"
     )
 
     assert LaunchConfigurationApplication().validate(config)["valid"] is True
+
+
+def test_launch_reference_readiness_uses_one_watermark_and_returns_owner_setup_goal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="reference-readiness"
+    )
+    config = launch_configuration.LaunchConfig.from_values(
+        {
+            "launch": {
+                "id": "reference-readiness",
+                "mode": "paper",
+                "strategy": "strategy:Factory",
+            },
+            "strategy": {
+                "params": {
+                    "market_id": "market:xnas:equity:AAPL",
+                    "instrument_id": "instrument:equity:US:AAPL:common",
+                    "catalog_setup_goal": {
+                        "kind": "exchange_instruments",
+                        "exchange_id": "exchange:nasdaq",
+                        "instrument_kind": "equity",
+                    },
+                }
+            },
+        },
+        root=workspace.paths.root,
+    )
+    session_entries = 0
+    planned: list[Mapping[str, object]] = []
+
+    class Session:
+        generation = 12
+        event_sequence = 34
+
+        def resolve_market(self, **_filters: object) -> object:
+            return SimpleNamespace(market=None)
+
+        def instruments(self, **_filters: object) -> list[object]:
+            return [object()]
+
+    class Client:
+        def __init__(self, **_options: object) -> None:
+            pass
+
+        @contextmanager
+        def read_session(self):
+            nonlocal session_entries
+            session_entries += 1
+            yield Session()
+
+        def plan_catalog_setup(self, goal: Mapping[str, object]) -> dict[str, object]:
+            planned.append(goal)
+            return {"goal": dict(goal), "availability": "not_configured"}
+
+    import kairospy.contracts.reference as reference_contract
+
+    monkeypatch.setattr(reference_contract, "ReferenceClient", Client)
+
+    diagnostics = resource_diagnostics._workspace_reference_diagnostics(
+        config, workspace.paths.root
+    )
+
+    assert session_entries == 1
+    assert len(diagnostics) == 1
+    assert diagnostics[0]["resource"] == "market_id:market:xnas:equity:AAPL"
+    assert diagnostics[0]["reference_watermark"] == {
+        "generation": 12,
+        "event_sequence": 34,
+    }
+    assert diagnostics[0]["setup_plan"]["availability"] == "not_configured"
+    assert planned == [diagnostics[0]["setup_goal"]]
 
 
 def test_launch_environment_writes_normalized_config_inside_instance(

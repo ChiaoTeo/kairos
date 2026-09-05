@@ -207,7 +207,7 @@ def handle_context(
                         summary=f"查看 {record_label(record)} 在哪里可以交易",
                         route=ResultRoute(ResultKind.REFERENCE_RELATED),
                         operation=lambda: load_instrument_markets(state, record),
-                        status="正在核对交易所市场与服务商渠道…",
+                        status="正在核对上市场所、成交场所与服务商目录覆盖…",
                     )
                 ),
             )
@@ -285,30 +285,48 @@ def handle_success(
         reference_kind = spec.route.qualifier
         assert reference_kind is not None
         records = tuple(result or ())
+        evidence = getattr(result, "evidence", None)
         if records:
-            return _show_record_choices(session, records, reference_kind)
+            return _show_record_choices(
+                session, records, reference_kind, evidence=evidence
+            )
+        conclusion = getattr(evidence, "conclusion", None)
+        if conclusion == "not_found_in_covered_scope":
+            message = "在当前已完整覆盖的范围内未找到匹配记录。"
+            status = "已覆盖范围内未找到"
+        elif conclusion == "preparing":
+            message = "相关目录正在准备，完成后可以重试这次搜索。"
+            status = "目录正在准备"
+        elif conclusion == "known_but_stale":
+            message = "只找到陈旧的目录覆盖；请先刷新来源，再判断是否不存在。"
+            status = "目录覆盖已陈旧"
+        elif conclusion == "source_unavailable":
+            message = "相关目录来源当前不可用，暂时不能判断该标的是否存在。"
+            status = "目录来源不可用"
+        else:
+            message = "当前目录覆盖尚不足以判断是否存在匹配记录。"
+            status = "当前目录尚不足以判断"
         if reference_kind == "trading-access":
             session.market.query = session.reference.query
-            session.enter_context(Routes.MARKET_MISSING)
-            message = Text(
-                "当前目录里还没有这个交易品种。"
-                "你可以选择交易所或交易服务，Kairos 会推荐合适的目录来源。",
-                style="yellow",
+            session.enter_context(
+                Routes.MARKET_NOT_FOUND
+                if conclusion == "not_found_in_covered_scope"
+                else Routes.MARKET_MISSING
             )
             interaction = ChoiceInteraction(
                 title=context_label(session.context, session.root_label),
-                summary=message,
+                summary=Text(message, style="yellow"),
                 actions=context_items(session, state),
             )
             session.interaction = interaction
-            return SetInteraction(interaction), SetStatus("尚未找到这个交易品种")
+            return SetInteraction(interaction), SetStatus(status)
         session.restore_context(Routes.REFERENCE)
         interaction = ChoiceInteraction(
             title=f"{session.root_label} / 市场标的",
-            summary=Text("没有找到匹配的目录记录。", style="dim"),
+            summary=Text(message, style="yellow"),
             actions=SECTION_ACTIONS[Section.REFERENCE],
         )
-        return SetInteraction(interaction), SetStatus("没有找到匹配结果")
+        return SetInteraction(interaction), SetStatus(status)
     if kind is ResultKind.REFERENCE_RELATED:
         related_kind, raw_records = result
         body = records_renderable(str(related_kind), tuple(raw_records))
@@ -489,7 +507,11 @@ def _standalone_activity(title: str, body: Any) -> AppendActivity:
 
 
 def _show_record_choices(
-    session: GuidedSession, records: tuple[Any, ...], record_kind: str
+    session: GuidedSession,
+    records: tuple[Any, ...],
+    record_kind: str,
+    *,
+    evidence: Any | None = None,
 ) -> tuple[ScreenEffect, ...]:
     session.enter_context(route(Section.REFERENCE, record_kind))
     visible = selection_records(
@@ -507,8 +529,31 @@ def _show_record_choices(
         )
         for index, record in enumerate(visible, 1)
     )
+    conclusion = getattr(evidence, "conclusion", None)
+    summary = None
+    if conclusion == "found":
+        summary = Text(
+            "目录记录已找到；结果使用本次查询开始时的最新已提交版本。", style="dim"
+        )
+    elif conclusion == "known_but_stale":
+        summary = Text(
+            "目录覆盖已陈旧；以下是上次成功同步的记录，不能据此确认当前状态。",
+            style="yellow",
+        )
+    elif conclusion == "source_unavailable":
+        summary = Text(
+            "目录来源当前不可用；以下已提交记录不能据此确认为最新。",
+            style="yellow",
+        )
+    elif conclusion == "preparing":
+        summary = Text(
+            "目录正在准备；以下仅显示已提交记录，不包含尚未完成同步的数据。",
+            style="yellow",
+        )
     interaction = ChoiceInteraction(
-        title=f"{session.root_label} / 市场标的", actions=actions
+        title=f"{session.root_label} / 市场标的",
+        summary=summary,
+        actions=actions,
     )
     return (
         SetInteraction(interaction),

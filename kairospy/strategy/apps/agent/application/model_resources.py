@@ -24,6 +24,7 @@ from .model_connections import (
     CatalogProbe,
     ConversationProbe,
     ModelProbe,
+    ModelProviderCatalogEntry,
     ModelProviderConnectionApplication,
 )
 
@@ -60,7 +61,7 @@ class PreparedAvailableModel:
 class ModelEndpointApplication:
     workspace: Workspace
 
-    def provider_catalog(self) -> tuple[dict[str, object], ...]:
+    def provider_catalog(self) -> tuple[ModelProviderCatalogEntry, ...]:
         return ModelProviderConnectionApplication(self.workspace).provider_catalog()
 
     def prepare(
@@ -805,9 +806,7 @@ def _provider_model(value: str) -> str:
 
 def _safe_model_id(value: str) -> str:
     value = value.strip()
-    if not re.fullmatch(
-        r"[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,126}[A-Za-z0-9_-])?", value
-    ):
+    if not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,126}[A-Za-z0-9_-])?", value):
         raise ValueError("model_id must be a path-safe identifier")
     return value
 

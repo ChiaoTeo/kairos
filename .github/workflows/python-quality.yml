@@ -25,7 +25,9 @@ jobs:
           enable-cache: true
 
       - name: Sync development environment
-        run: uv sync --locked --group dev --extra observability
+        run: >-
+          uv sync --locked --group dev
+          --extra observability --extra data --extra query
 
       - name: Check Python lint
         run: uv run ruff check kairospy tests
@@ -38,3 +40,6 @@ jobs:
 
       - name: Run Python tests
         run: uv run pytest -q
+
+      - name: Run Rust/Python interoperability tests
+        run: uv run pytest -q -m rust_interop

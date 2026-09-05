@@ -7,7 +7,7 @@ use crate::application::ReferenceApplication;
 use crate::application::process::runtime::state::{
     ReferenceApplicationPhase, ReferenceTickTrigger, tick_log_summary,
 };
-use crate::domain::{LifecycleEvent, ReferenceResult};
+use crate::domain::ReferenceResult;
 use crate::logging::events as log_events;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -16,7 +16,6 @@ pub struct ReferenceRefreshResult {
     pub event_sequence: Sequence,
     pub changed: bool,
     pub change_count: usize,
-    pub events: Vec<LifecycleEvent>,
 }
 
 impl ReferenceApplication {
@@ -259,7 +258,7 @@ impl ReferenceApplication {
             sources_syncing = tick_summary.sources_syncing,
             sources_stale = tick_summary.sources_stale,
             changed_records = result.event_count,
-            lifecycle_events = result.events.len(),
+            lifecycle_events = result.event_count,
             generation_before = generation_before.get(),
             generation_after = result.generation.get(),
             event_sequence_before = event_sequence_before.get(),
@@ -273,7 +272,6 @@ impl ReferenceApplication {
             event_sequence: result.event_sequence,
             changed: result.changed,
             change_count: result.event_count,
-            events: result.events,
         })
     }
 }

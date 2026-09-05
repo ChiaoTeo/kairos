@@ -404,12 +404,32 @@ impl<'a, C, P> TypedConnectionCollection<'a, C, P> {
             .connections
             .get_mut(&key.to_string())
             .ok_or_else(|| ConnectionAccessError::NotFound(key.clone()))?;
-        if managed.state() == ResourceState::Retiring {
+        Self::validate_access(key, managed.state(), self.requires_ready)?;
+        Ok(managed.connection_mut())
+    }
+
+    /// Borrow a managed connection for a capability whose query methods are
+    /// read-only. The borrow prevents lifecycle mutation until queries finish.
+    pub fn get_shared(&self, key: &ConnectionKey) -> Result<&C, ConnectionAccessError> {
+        let managed = self
+            .connections
+            .get(&key.to_string())
+            .ok_or_else(|| ConnectionAccessError::NotFound(key.clone()))?;
+        Self::validate_access(key, managed.state(), self.requires_ready)?;
+        Ok(managed.connection())
+    }
+
+    fn validate_access(
+        key: &ConnectionKey,
+        state: ResourceState,
+        requires_ready: bool,
+    ) -> Result<(), ConnectionAccessError> {
+        if state == ResourceState::Retiring {
             return Err(ConnectionAccessError::Retiring(key.clone()));
         }
-        if (self.requires_ready && managed.state() != ResourceState::Ready)
+        if (requires_ready && state != ResourceState::Ready)
             || matches!(
-                managed.state(),
+                state,
                 ResourceState::Starting
                     | ResourceState::Failed
                     | ResourceState::Stopping
@@ -418,7 +438,7 @@ impl<'a, C, P> TypedConnectionCollection<'a, C, P> {
         {
             return Err(ConnectionAccessError::NotReady(key.clone()));
         }
-        Ok(managed.connection_mut())
+        Ok(())
     }
 
     pub fn keys(&self) -> Vec<ConnectionKey> {
@@ -1110,36 +1130,6 @@ impl ConfluxSystem {
         self.reference_clients
             .get(&key.to_owned())
             .map(|managed| managed.client().clone())
-    }
-
-    pub fn reference_market_snapshot(
-        &mut self,
-        key: &str,
-    ) -> Result<kairos_reference_contract::MarketReferenceSnapshot, String> {
-        self.reference_client_mut(key)
-            .ok_or_else(|| format!("managed Reference client is missing: {key}"))?
-            .market_snapshot()
-            .map_err(|error| error.to_string())
-    }
-
-    pub fn reference_execution_snapshot(
-        &mut self,
-        key: &str,
-    ) -> Result<kairos_reference_contract::ExecutionReferenceSnapshot, String> {
-        self.reference_client_mut(key)
-            .ok_or_else(|| format!("managed Reference client is missing: {key}"))?
-            .execution_snapshot()
-            .map_err(|error| error.to_string())
-    }
-
-    pub fn reference_account_snapshot(
-        &mut self,
-        key: &str,
-    ) -> Result<kairos_reference_contract::AccountReferenceSnapshot, String> {
-        self.reference_client_mut(key)
-            .ok_or_else(|| format!("managed Reference client is missing: {key}"))?
-            .account_snapshot()
-            .map_err(|error| error.to_string())
     }
 
     pub fn install_risk_contract(
@@ -2304,6 +2294,9 @@ mod tests {
             view.get(&key),
             Err(ConnectionAccessError::NotReady(value)) if value == key
         ));
+        assert!(
+            matches!(view.get_shared(&key), Err(ConnectionAccessError::NotReady(value)) if value == key)
+        );
         drop(view);
         managed
             .get_mut(&key.to_string())
@@ -2319,6 +2312,39 @@ mod tests {
         let mut view = TypedConnectionCollection::new(&mut bounded, create_fake, false);
         view.create(key.clone(), ()).unwrap();
         assert!(view.get(&key).is_ok());
+        let first = view.get_shared(&key).unwrap();
+        let second = view.get_shared(&key).unwrap();
+        assert!(std::ptr::eq(first, second));
+        drop(view);
+        for state in [
+            ResourceState::Starting,
+            ResourceState::Failed,
+            ResourceState::Stopping,
+            ResourceState::Stopped,
+            ResourceState::Retiring,
+        ] {
+            bounded.get_mut(&key.to_string()).unwrap().set_state(state);
+            let mut view = TypedConnectionCollection::new(&mut bounded, create_fake, false);
+            if state == ResourceState::Retiring {
+                assert!(matches!(
+                    view.get_shared(&key),
+                    Err(ConnectionAccessError::Retiring(_))
+                ));
+                assert!(matches!(
+                    view.get(&key),
+                    Err(ConnectionAccessError::Retiring(_))
+                ));
+            } else {
+                assert!(matches!(
+                    view.get_shared(&key),
+                    Err(ConnectionAccessError::NotReady(_))
+                ));
+                assert!(matches!(
+                    view.get(&key),
+                    Err(ConnectionAccessError::NotReady(_))
+                ));
+            }
+        }
     }
 
     #[test]

@@ -3,6 +3,9 @@
 from importlib import import_module
 from typing import Any
 
+from .events import __all__ as _EVENT_EXPORTS
+
+
 _EXPORTS = {
     "AccountContractClient": (".types", "AccountClient"),
     "AccountClient": (".types", "AccountClient"),
@@ -13,7 +16,10 @@ _EXPORTS = {
     "AccountInvalidInputError": (".types", "AccountInvalidInputError"),
     "AccountInvalidEventError": (".types", "AccountInvalidEventError"),
     "AccountInvalidCurrentViewError": (".types", "AccountInvalidCurrentViewError"),
-    "AccountCurrentViewUnavailableError": (".types", "AccountCurrentViewUnavailableError"),
+    "AccountCurrentViewUnavailableError": (
+        ".types",
+        "AccountCurrentViewUnavailableError",
+    ),
     "AccountControlUnavailableError": (".types", "AccountControlUnavailableError"),
     "AccountControlRejectedError": (".types", "AccountControlRejectedError"),
     "MarkToMarketRequest": (".types", "MarkToMarketRequest"),
@@ -29,7 +35,6 @@ _EXPORTS = {
     "AccountSegmentCurrent": (".types", "AccountSegmentCurrent"),
     "decode_event": (".events", "decode_event"),
 }
-from .events import __all__ as _EVENT_EXPORTS
 _EXPORTS.update({name: (".events", name) for name in _EVENT_EXPORTS})
 
 

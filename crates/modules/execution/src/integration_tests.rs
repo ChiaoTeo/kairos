@@ -33,9 +33,9 @@ use kairos_execution::composition::{
 use kairos_execution::{
     AlgorithmActionKind, AlgorithmActionStatus, AlgorithmExecutionStyle, AlgorithmRunStatus,
     DeliveryCertainty, ExecutionApplication, ExecutionCommandKind, ExecutionError, ExecutionEvent,
-    ExecutionOrderStatus, HedgePolicy, MarketObservation, OrderFactCursor,
-    OrderReconciliationCause, OrderSide, OrderType, Quote, SplitOrderPolicy,
-    UnknownRemoteOrderResolution,
+    ExecutionOrderStatus, ExecutionRuntimeError, HedgePolicy, MarketObservation, OrderError,
+    OrderFactCursor, OrderReconciliationCause, OrderSide, OrderType, Quote, RouteConstraintFailure,
+    SplitOrderPolicy, UnknownRemoteOrderResolution,
 };
 use kairos_execution_contract::{
     EXECUTION_MAP_SIZE, ExecutionControlRpcServer, execution_indexed_environment_path,
@@ -884,11 +884,17 @@ fn route_selection_rejects_an_instrument_mismatch_before_creating_order_state() 
             None,
         ))
         .unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("configured for instrument BTCUSDT")
-    );
+    let ExecutionError::Order(route_error) = &error else {
+        panic!("expected a typed route error: {error}");
+    };
+    assert_eq!(route_error.code(), "execution.order.route.instrument");
+    assert!(matches!(
+        error,
+        ExecutionError::Order(OrderError::RouteConstraint {
+            failure: RouteConstraintFailure::Instrument,
+            ..
+        })
+    ));
     assert!(app.orders(None).is_empty());
 }
 
@@ -943,7 +949,17 @@ fn route_selection_rejects_an_unsupported_order_type_before_creating_order_state
             None,
         ))
         .unwrap_err();
-    assert!(error.to_string().contains("does not support Limit orders"));
+    let ExecutionError::Order(route_error) = &error else {
+        panic!("expected a typed route error: {error}");
+    };
+    assert_eq!(route_error.code(), "execution.order.route.order_type");
+    assert!(matches!(
+        error,
+        ExecutionError::Order(OrderError::RouteConstraint {
+            failure: RouteConstraintFailure::OrderType,
+            ..
+        })
+    ));
     assert!(app.orders(None).is_empty());
 }
 
@@ -2068,13 +2084,12 @@ fn indeterminate_cancel_marks_the_order_unknown_for_reconciliation() {
         order_id: OrderId::new("cancel-indeterminate").unwrap(),
         reason: "unsafe retry".into(),
     });
-    assert!(matches!(retry, Err(ExecutionError::Invalid(_))));
-    assert!(
-        retry
-            .unwrap_err()
-            .to_string()
-            .contains("indeterminate cancel attempt")
-    );
+    assert!(matches!(
+        retry,
+        Err(ExecutionError::Order(
+            OrderError::IndeterminateCancelAttempt { ref order_id }
+        )) if order_id.as_str() == "cancel-indeterminate"
+    ));
 
     restored
         .apply_remote_execution_event(RemoteOrderUpdate {
@@ -2159,14 +2174,14 @@ fn replacement_quantity_is_the_unfilled_remainder_of_the_requested_total() {
         .unwrap(),
         Quantity::new(7, 0).unwrap()
     );
-    assert!(
+    assert!(matches!(
         crate::application::core::orders::replacement_remaining_quantity(
             Quantity::new(3, 0).unwrap(),
             Quantity::new(3, 0).unwrap(),
         )
-        .unwrap_err()
-        .contains("must exceed")
-    );
+        .unwrap_err(),
+        OrderError::ReplacementTotalNotAboveFilled { .. }
+    ));
 }
 
 #[test]
@@ -4627,7 +4642,20 @@ fn execution_actor_business_time_survives_restart_and_rejects_regression() {
     let mut restored = application(&path);
     assert_eq!(restored.business_time_unix_nanos(), Some(100));
     let error = restored.advance_time(99).unwrap_err();
-    assert!(error.to_string().contains("cannot move backwards"));
+    let ExecutionError::Runtime(runtime_error) = &error else {
+        panic!("expected a typed runtime error: {error}");
+    };
+    assert_eq!(
+        runtime_error.code(),
+        "execution.runtime.business_time_regression"
+    );
+    assert!(matches!(
+        error,
+        ExecutionError::Runtime(ExecutionRuntimeError::BusinessTimeRegression {
+            current,
+            requested,
+        }) if current == UnixNanos::new(100) && requested == UnixNanos::new(99)
+    ));
     assert_eq!(restored.business_time_unix_nanos(), Some(100));
 
     restored.advance_time(101).unwrap();

@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-import os
-import shutil
 import json
+import subprocess
 from pathlib import Path
 import pytest
 
 from kairospy.system.apps.launch import StrategyProcessController
+from kairospy.system.apps.launch.application import strategy_process as process_module
 from kairospy.system.apps.launch.composition import compose_strategy_process
 from kairospy.system.apps.launch import LaunchControlApplication
 from kairospy.system.apps.launch.composition import release_strategy_market_owner
@@ -69,8 +69,7 @@ def _write_component_manifest(
 def test_strategy_process_starts_without_snapshot_event_join(
     tmp_path: Path,
 ) -> None:
-    root = Path(f"/tmp/ksp-{os.getpid()}")
-    shutil.rmtree(root, ignore_errors=True)
+    root = tmp_path / "strategy-process"
     workspace = WorkspaceApplication().init(root / "w", workspace_id="sp")
     (workspace.paths.root / "user_strategy.py").write_text(
         "from kairospy.strategy import Strategy\n"
@@ -97,6 +96,9 @@ def test_strategy_process_starts_without_snapshot_event_join(
         launch_id="l",
         instance_id="i",
     )
+    metadata_path = instance.paths.process_dir("strategy") / "process.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    pid = int(metadata["pid"])
     assert (
         workspace.instance("paper", "l", "i").log("strategy", "process.log").is_file()
     )
@@ -108,8 +110,96 @@ def test_strategy_process_starts_without_snapshot_event_join(
         assert started["status"] == "ready"
         assert started["reason"] is None
     finally:
-        process.stop("l", "i")
-        shutil.rmtree(root, ignore_errors=True)
+        assert process.stop("l", "i")["status"] == "stopped"
+    assert not metadata_path.exists()
+    observed = subprocess.run(
+        ["ps", "-p", str(pid), "-o", "stat="],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.strip()
+    assert not observed or observed.startswith("Z")
+
+
+def test_strategy_start_timeout_terminates_the_spawned_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="sp-timeout"
+    )
+    instance = workspace.instance("paper", "launch", "instance")
+    instance.prepare()
+
+    class FakeProcess:
+        pid = 424_242
+
+        @staticmethod
+        def poll() -> None:
+            return None
+
+    async def unavailable(*_args, **_kwargs):
+        raise FileNotFoundError("control socket unavailable")
+
+    terminated: list[tuple[int, float]] = []
+    monkeypatch.setattr(
+        process_module.subprocess, "Popen", lambda *_a, **_k: FakeProcess()
+    )
+    monkeypatch.setattr(process_module.UnixRestClient, "request", unavailable)
+    monkeypatch.setattr(
+        process_module,
+        "_terminate_process",
+        lambda pid, timeout: terminated.append((pid, timeout)),
+    )
+    controller = StrategyProcessController(workspace, ready_timeout=0.01)
+
+    with pytest.raises(TimeoutError, match="did not become ready"):
+        controller.ensure_running(
+            "user_strategy:UserStrategy",
+            launch_id="launch",
+            instance_id="instance",
+        )
+
+    assert terminated == [(424_242, 0.01)]
+    assert not (instance.paths.process_dir("strategy") / "process.json").exists()
+
+
+def test_strategy_stop_uses_owned_pid_when_control_is_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="sp-stop-fallback"
+    )
+    instance = workspace.instance("paper", "launch", "instance")
+    instance.prepare()
+    metadata_path = instance.paths.process_dir("strategy") / "process.json"
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata_path.write_text("{}", encoding="utf-8")
+    terminated = False
+
+    async def unavailable(*_args, **_kwargs):
+        raise FileNotFoundError("control socket unavailable")
+
+    def terminate(_pid: int, _timeout: float) -> None:
+        nonlocal terminated
+        terminated = True
+
+    monkeypatch.setattr(process_module.UnixRestClient, "request", unavailable)
+    monkeypatch.setattr(process_module, "_owned_process_pid", lambda *_a, **_k: 424_242)
+    monkeypatch.setattr(process_module, "_terminate_process", terminate)
+    monkeypatch.setattr(
+        process_module,
+        "_wait_process_exit",
+        lambda *_a, **_k: terminated,
+    )
+
+    result = StrategyProcessController(workspace, ready_timeout=0.01).stop(
+        "launch", "instance"
+    )
+
+    assert result["status"] == "stopped"
+    assert result["control_error"] == "control socket unavailable"
+    assert terminated
+    assert not metadata_path.exists()
 
 
 def test_launch_status_and_stop_are_safe_when_instance_is_not_running(

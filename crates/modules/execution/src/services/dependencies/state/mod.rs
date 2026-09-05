@@ -18,7 +18,6 @@ use kairos_primitives::time::Sequence;
 use kairos_protocol::generated::kairos::account::v_2::{
     AccountStatus, FreshnessState, PositionSide as AccountPositionSide,
 };
-use kairos_reference_contract::Market;
 use kairos_risk_contract::{Health as RiskHealth, RiskControlRpcClient};
 
 #[derive(Clone)]
@@ -58,14 +57,6 @@ pub(super) struct MarketDependencyState {
 }
 
 #[derive(Clone)]
-pub(super) struct ReferenceDependencyState {
-    pub(super) generation: kairos_primitives::time::Generation,
-    pub(super) event_sequence: Sequence,
-    pub(super) markets: Vec<Market>,
-    pub(super) refreshed_at: Instant,
-}
-
-#[derive(Clone)]
 pub(super) struct RiskDependencyState {
     pub(super) health: RiskHealth,
 }
@@ -74,7 +65,6 @@ pub(super) struct RiskDependencyState {
 pub(super) struct DependencyState {
     pub(super) accounts: BTreeMap<String, AccountDependencyState>,
     pub(super) market: Option<MarketDependencyState>,
-    pub(super) reference: Option<ReferenceDependencyState>,
     pub(super) risk: Option<RiskDependencyState>,
 }
 
@@ -93,7 +83,6 @@ impl DependencyStateRuntime {
         accounts: &BTreeMap<String, AccountClient>,
         identity: &InstanceIdentity,
         market_snapshot: Option<&Path>,
-        reference: Option<ReferenceDependencyState>,
         risk: Option<kairos_risk_contract::RiskClient>,
     ) -> Self {
         let state = Arc::new(RwLock::new(DependencyState::default()));
@@ -169,11 +158,6 @@ impl DependencyStateRuntime {
                 }
             }));
         }
-        if let Some(reference) = reference {
-            if let Ok(mut state) = state.write() {
-                state.reference = Some(reference);
-            }
-        }
         if let Some(endpoint) = risk {
             let state = Arc::clone(&state);
             let stop = Arc::clone(&stop);
@@ -220,19 +204,6 @@ impl DependencyStateRuntime {
             return Err(format!("account state is stale: {account_id}"));
         }
         Ok(value)
-    }
-
-    pub(super) fn reference(&self) -> Result<ReferenceDependencyState, String> {
-        let mut guard = self
-            .state
-            .write()
-            .map_err(|_| "reference state lock poisoned".to_string())?;
-        let value = guard
-            .reference
-            .as_mut()
-            .ok_or_else(|| "reference state is not ready".to_string())?;
-        value.refreshed_at = Instant::now();
-        Ok(value.clone())
     }
 
     pub(super) fn refresh_accounts(
@@ -287,13 +258,7 @@ impl DependencyStateRuntime {
                     generation: value.generation.into(),
                     event_sequence: 0.into(),
                 }),
-            reference: state
-                .reference
-                .as_ref()
-                .map(|value| crate::domain::SnapshotWatermark {
-                    generation: value.generation.into(),
-                    event_sequence: value.event_sequence.into(),
-                }),
+            reference: None,
             risk: state
                 .risk
                 .as_ref()
@@ -311,43 +276,6 @@ impl Drop for DependencyStateRuntime {
         for worker in self.workers.drain(..) {
             let _ = worker.join();
         }
-    }
-}
-
-pub(super) fn reference_dependency_state(
-    snapshot: kairos_reference_contract::ExecutionReferenceSnapshot,
-) -> ReferenceDependencyState {
-    let markets = snapshot
-        .markets
-        .into_iter()
-        .map(|value| Market {
-            market_id: value.market_id,
-            instrument_id: value.instrument_id,
-            listing_id: value.listing_id,
-            exchange_id: value.exchange_id,
-            instrument_kind: value.instrument_kind,
-            asset_type: value.asset_type,
-            venue_symbol: value.venue_symbol,
-            base_asset_id: value.base_asset_id,
-            quote_asset_id: value.quote_asset_id,
-            underlying_instrument_id: value.underlying_instrument_id,
-            status: value.status,
-            price_tick: value.price_tick,
-            quantity_tick: value.quantity_tick,
-            minimum_quantity: value.minimum_quantity,
-            minimum_notional: value.minimum_notional,
-            price_precision: value.price_precision,
-            quantity_precision: value.quantity_precision,
-            contract_size: value.contract_size,
-            effective_from_unix_nanos: value.effective_from_unix_nanos,
-            effective_to_unix_nanos: value.effective_to_unix_nanos,
-        })
-        .collect();
-    ReferenceDependencyState {
-        generation: snapshot.generation,
-        event_sequence: snapshot.event_sequence,
-        markets,
-        refreshed_at: Instant::now(),
     }
 }
 

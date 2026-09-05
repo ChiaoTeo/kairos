@@ -33,6 +33,8 @@ pub struct UpsertInstrumentRequest {
     pub share_class: Option<String>,
     #[serde(default)]
     pub primary_currency_asset_id: Option<AssetId>,
+    #[serde(default)]
+    pub settlement_asset_id: Option<AssetId>,
     pub underlying_instrument_id: Option<InstrumentId>,
     pub expiry_unix_nanos: Option<UnixNanos>,
     pub strike: Option<Price>,
@@ -110,7 +112,7 @@ pub struct ReferenceSourceDefinitionRequest {
     pub scope: ReferenceSourceScope,
     pub desired_state: ReferenceSourceDesiredState,
     #[serde(default)]
-    pub credential_binding: Option<String>,
+    pub connection_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -196,7 +198,6 @@ pub enum ReferenceCatalogRecommendation {
 #[serde(rename_all = "snake_case")]
 pub enum ReferenceCatalogActualScope {
     RequestedExchange,
-    CompleteUnitedStatesEquities,
     ProviderCatalog,
     SelectedUnderlyings,
 }
@@ -213,7 +214,6 @@ pub enum ReferenceCatalogRecommendationReason {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReferenceCatalogSourceLimitation {
-    SynchronizesCompleteUnitedStatesEquities,
     RequiresProviderAccount,
     ProductIsProviderSpecific,
 }
@@ -248,6 +248,27 @@ pub enum ReferenceSourceBinding {
     Okx(OkxReferenceSource),
     Hyperliquid(HyperliquidReferenceSource),
     Massive(MassiveReferenceSource),
+}
+
+impl ReferenceSourceBinding {
+    pub const fn source_id(self) -> &'static str {
+        match self {
+            Self::Binance(BinanceReferenceSource::Spot) => "binance-spot",
+            Self::Binance(BinanceReferenceSource::UsdMFutures) => "binance-usdm-futures",
+            Self::Binance(BinanceReferenceSource::CoinMFutures) => "binance-coinm-futures",
+            Self::Binance(BinanceReferenceSource::Options) => "binance-options",
+            Self::Binance(BinanceReferenceSource::Equity) => "binance-equity",
+            Self::Okx(OkxReferenceSource::Spot) => "okx-spot",
+            Self::Okx(OkxReferenceSource::Margin) => "okx-margin",
+            Self::Okx(OkxReferenceSource::Swap) => "okx-swap",
+            Self::Okx(OkxReferenceSource::Futures) => "okx-futures",
+            Self::Okx(OkxReferenceSource::Options) => "okx-options",
+            Self::Hyperliquid(HyperliquidReferenceSource::Spot) => "hyperliquid-spot",
+            Self::Hyperliquid(HyperliquidReferenceSource::Perpetual) => "hyperliquid-perpetual",
+            Self::Massive(MassiveReferenceSource::Equity) => "massive-equity",
+            Self::Massive(MassiveReferenceSource::Options) => "massive-options",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -449,6 +470,24 @@ pub struct ReferencePublicationRuntimeError {
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ReferenceCoverageRuntimeStatus {
     pub option_underlyings: Vec<InstrumentId>,
+    #[serde(default)]
+    pub coverage_count: u64,
+    #[serde(default)]
+    pub usable_coverage_count: u64,
+    #[serde(default)]
+    pub stale_coverage_count: u64,
+    #[serde(default)]
+    pub unavailable_coverage_count: u64,
+    #[serde(default)]
+    pub unresolved_venue_mapping_count: u64,
+    #[serde(default)]
+    pub v2_unprojectable_market_count: u64,
+    #[serde(default)]
+    pub canonical_conflict_count: u64,
+    /// Current source conflicts grouped by the canonical fact kind that could
+    /// not be reconciled. The scalar remains the total for older clients.
+    #[serde(default)]
+    pub canonical_conflict_counts: std::collections::BTreeMap<String, u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -471,7 +510,7 @@ pub struct ReferenceSourceRuntimeStatus {
     #[serde(default)]
     pub scope: Option<ReferenceSourceScope>,
     #[serde(default)]
-    pub credential_binding_present: Option<bool>,
+    pub connection_id_present: Option<bool>,
     pub phase: ReferenceSourcePhase,
     pub progress: ReferenceSourceProgress,
     #[serde(default)]
@@ -859,7 +898,7 @@ mod tests {
                 kind: ReferenceSourceScopeKind::UnderlyingInstrument,
                 id: Some("instrument:equity:US:SPY:common".into()),
             }),
-            credential_binding_present: Some(true),
+            connection_id_present: Some(true),
             phase: ReferenceSourcePhase::Disabled,
             progress: ReferenceSourceProgress {
                 kind: ReferenceSourceProgressKind::Unknown,
@@ -899,7 +938,7 @@ mod tests {
         assert_eq!(value["sync_policy"], "scoped_snapshot");
         assert_eq!(value["scope"]["kind"], "underlying_instrument");
         assert_eq!(value["scope"]["id"], "instrument:equity:US:SPY:common");
-        assert_eq!(value["credential_binding_present"], true);
+        assert_eq!(value["connection_id_present"], true);
         assert_eq!(value["last_error"]["code"], "reference.provider_failed");
         assert_eq!(value["last_error"]["retryable"], true);
         let decoded: ReferenceSourceRuntimeStatus = serde_json::from_value(value).unwrap();
@@ -920,7 +959,7 @@ mod tests {
             decoded.scope.as_ref().map(|scope| scope.kind),
             Some(ReferenceSourceScopeKind::UnderlyingInstrument)
         );
-        assert_eq!(decoded.credential_binding_present, Some(true));
+        assert_eq!(decoded.connection_id_present, Some(true));
     }
 
     #[test]
@@ -1123,7 +1162,7 @@ mod tests {
                 id: Some("instrument:equity:US:SPY:common".into()),
             },
             desired_state: ReferenceSourceDesiredState::Enabled,
-            credential_binding: Some("massive.default".into()),
+            connection_id: Some("massive-main".into()),
         };
 
         let value = serde_json::to_value(&request).unwrap();
@@ -1135,7 +1174,7 @@ mod tests {
         assert_eq!(value["scope"]["kind"], "underlying_instrument");
         assert_eq!(value["scope"]["id"], "instrument:equity:US:SPY:common");
         assert_eq!(value["desired_state"], "enabled");
-        assert_eq!(value["credential_binding"], "massive.default");
+        assert_eq!(value["connection_id"], "massive-main");
         assert!(value.get("sync_policy").is_none());
 
         let decoded: ReferenceSourceDefinitionRequest = serde_json::from_value(value).unwrap();

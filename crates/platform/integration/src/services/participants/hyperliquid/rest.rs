@@ -51,7 +51,7 @@ impl RestService {
         &self.endpoint
     }
 
-    pub(crate) fn client(&mut self) -> &mut HttpClient {
-        &mut self.client
+    pub(crate) fn client(&self) -> &HttpClient {
+        &self.client
     }
 }

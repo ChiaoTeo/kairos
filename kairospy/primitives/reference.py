@@ -12,6 +12,11 @@ class ExchangeId(TextValue):
 
 
 @dataclass(frozen=True, slots=True)
+class VenueId(TextValue):
+    """Canonical Reference listing, execution, or reporting venue identity."""
+
+
+@dataclass(frozen=True, slots=True)
 class InstrumentId(TextValue):
     """Canonical economic instrument identity."""
 
@@ -67,6 +72,7 @@ class ReferenceSourceId(TextValue):
 
 
 ExchangeIdRead = NewType("ExchangeIdRead", str)
+VenueIdRead = NewType("VenueIdRead", str)
 AssetIdRead = NewType("AssetIdRead", str)
 CurrencyRead = NewType("CurrencyRead", str)
 InstrumentIdRead = NewType("InstrumentIdRead", str)
@@ -107,6 +113,8 @@ __all__ = [
     "CurrencyRead",
     "ExchangeId",
     "ExchangeIdRead",
+    "VenueId",
+    "VenueIdRead",
     "InstrumentId",
     "InstrumentIdRead",
     "InstrumentKind",

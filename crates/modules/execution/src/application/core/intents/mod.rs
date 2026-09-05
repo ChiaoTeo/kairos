@@ -96,7 +96,7 @@ impl ExecutionApplication {
         let hedge = filled_for(&policy.hedge_leg_id)?;
         let required = policy
             .required_hedge_quantity(leader, Quantity::ZERO)
-            .map_err(ExecutionError::Invalid)?;
+            .map_err(ExecutionError::Intent)?;
         let unhedged = if hedge >= required {
             Quantity::ZERO
         } else {
@@ -204,7 +204,7 @@ impl ExecutionApplication {
             .unwrap_or(business_time_unix_nanos);
         if !spec
             .hedge_due(exposure, decision_time.into())
-            .map_err(ExecutionError::Invalid)?
+            .map_err(ExecutionError::Algorithm)?
         {
             if spec.max_unhedged_duration.is_some() && !exposure.unhedged_filled_quantity.is_zero()
             {
@@ -215,10 +215,10 @@ impl ExecutionApplication {
                         ready_children: Vec::new(),
                     },
                 )
-                .map_err(ExecutionError::Invalid)?;
+                .map_err(ExecutionError::Algorithm)?;
                 self.actor
                     .apply_algorithm_decision(intent_id, decision)
-                    .map_err(ExecutionError::Invalid)?;
+                    .map_err(ExecutionError::Algorithm)?;
                 self.persist_snapshot()?;
             }
             return Ok(());
@@ -281,11 +281,11 @@ impl ExecutionApplication {
                 }],
             },
         )
-        .map_err(ExecutionError::Invalid)?;
+        .map_err(ExecutionError::Algorithm)?;
         let actions = self
             .actor
             .apply_algorithm_decision(intent_id, decision)
-            .map_err(ExecutionError::Invalid)?;
+            .map_err(ExecutionError::Algorithm)?;
         actions
             .into_iter()
             .find(|action| {
@@ -315,7 +315,7 @@ impl ExecutionApplication {
         request.submitted_at_unix_nanos = Some(decision_time.into());
         self.actor
             .schedule_pending_order(intent_id, request, decision_time.into())
-            .map_err(ExecutionError::Invalid)?;
+            .map_err(ExecutionError::Intent)?;
         // The action and reconstructable request become durable together;
         // direct and managed runtimes dispatch them through the same due loop.
         self.persist_snapshot()
@@ -392,7 +392,7 @@ impl ExecutionApplication {
         let limit_price = protected_unwind_price(reference_price, unwind_side, max_slippage_bps)?;
         let unwind_quantity = spec
             .leader_quantity_for_hedge_exposure(exposure.unhedged_after_commitment)
-            .map_err(ExecutionError::Invalid)?;
+            .map_err(ExecutionError::Algorithm)?;
         let order_id = OrderId::new(format!(
             "{}:unwind:decision:{}",
             intent_id,
@@ -416,10 +416,10 @@ impl ExecutionApplication {
                 }],
             },
         )
-        .map_err(ExecutionError::Invalid)?;
+        .map_err(ExecutionError::Algorithm)?;
         self.actor
             .apply_algorithm_decision(intent_id, decision)
-            .map_err(ExecutionError::Invalid)?
+            .map_err(ExecutionError::Algorithm)?
             .into_iter()
             .find(|action| {
                 matches!(
@@ -458,7 +458,7 @@ impl ExecutionApplication {
         self.actor.increment_compensation_attempts(intent_id);
         self.actor
             .schedule_pending_order(intent_id, request.clone(), decision_time.into())
-            .map_err(ExecutionError::Invalid)?;
+            .map_err(ExecutionError::Intent)?;
         // Persist the stable action and its reconstructable request atomically.
         // If the process stops before dispatch, the ordinary due-order loop
         // resumes this exact order identity and execution style after restart.

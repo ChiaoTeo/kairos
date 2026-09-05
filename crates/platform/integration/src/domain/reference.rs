@@ -46,10 +46,32 @@ pub struct ExternalInstrument {
     pub quantity_precision: Option<u32>,
 }
 
+/// Provider-native venue reference facts. Integration preserves provider
+/// identifiers and classification; Reference owns canonical Venue identity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExternalVenueKind {
+    Exchange,
+    Sip,
+    TradeReportingFacility,
+    Unknown,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExternalVenue {
+    pub provider_identifier: String,
+    pub participant_identifier: Option<String>,
+    pub mic: Option<String>,
+    pub operating_mic: Option<String>,
+    pub name: String,
+    pub kind: ExternalVenueKind,
+    pub active: bool,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExternalInstrumentCatalog {
     pub participant: ParticipantRef,
     pub instruments: Vec<ExternalInstrument>,
+    pub venues: Vec<ExternalVenue>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

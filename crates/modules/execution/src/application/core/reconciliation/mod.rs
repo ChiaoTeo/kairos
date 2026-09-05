@@ -259,7 +259,7 @@ impl ExecutionApplication {
                         reconciliation_reason,
                         None,
                     )
-                    .map_err(ExecutionError::Invalid)?;
+                    .map_err(ExecutionError::Order)?;
                 let reconciled = self
                     .actor
                     .order(local.order_id.as_str())
@@ -458,7 +458,7 @@ impl ExecutionApplication {
                 event.reason,
                 event.source_cursor.clone(),
             )
-            .map_err(ExecutionError::Invalid)?;
+            .map_err(ExecutionError::Order)?;
         self.update_commitment_from_order(&next, business_time)?;
         let risk_effect = match next.status {
             ExecutionOrderStatus::Filled => Some(RiskReservationSagaStatus::ConsumePending),
@@ -500,7 +500,7 @@ impl ExecutionApplication {
         if self
             .actor
             .observe_order_fact_cursor(local.order_id.as_str(), cursor)
-            .map_err(ExecutionError::Invalid)?
+            .map_err(ExecutionError::Order)?
         {
             self.persist_snapshot()?;
         }
@@ -529,7 +529,7 @@ impl ExecutionApplication {
         let business_time = self.require_business_time("unknown remote order resolution")?;
         self.actor
             .resolve_unknown_remote_order(remote_order_id, resolution, reason.into(), business_time)
-            .map_err(ExecutionError::Invalid)?;
+            .map_err(ExecutionError::Order)?;
         self.persist_snapshot()
     }
 
@@ -544,7 +544,7 @@ impl ExecutionApplication {
         let (unknown, local, event) = self
             .actor
             .link_unknown_remote_order(remote_order_id, local_order_id)
-            .map_err(ExecutionError::Invalid)?;
+            .map_err(ExecutionError::Order)?;
         self.commit(event)?;
         if let (Some(quantity), Some(price)) = (unknown.fill_quantity, unknown.fill_price) {
             return self.record_fill(ExecutionFillReport {

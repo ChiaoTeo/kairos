@@ -24,16 +24,130 @@ mod tests {
         event_count: usize,
     }
 
+    #[tokio::test]
+    async fn conflict_selection_rejects_all_connected_sources_before_rebuilding() {
+        for reverse_records in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let mut store = SqlxProviderSyncStore::open(directory.path().join("reference.sqlite"))
+                .await
+                .unwrap();
+            let (left, right) = if reverse_records {
+                ("exchange:y", "exchange:x")
+            } else {
+                ("exchange:x", "exchange:y")
+            };
+            let assertions = [
+                ("source-a", vec![(left, "active")]),
+                ("source-b", vec![(left, "inactive"), (right, "active")]),
+                ("source-c", vec![(right, "inactive")]),
+                ("source-healthy", vec![("exchange:healthy", "active")]),
+            ];
+            let mut changes = crate::services::sources::SourceChanges::default();
+            for (source, records) in assertions {
+                changes
+                    .completed_scans
+                    .insert(kairos_primitives::reference::ReferenceSourceId::new(source).unwrap());
+                let catalog = ProviderCatalog {
+                    exchanges: records
+                        .into_iter()
+                        .map(|(id, status)| Exchange {
+                            exchange_id: ExchangeId::new(id).unwrap(),
+                            name: id.into(),
+                            status: status.into(),
+                            ..Default::default()
+                        })
+                        .collect(),
+                    ..Default::default()
+                };
+                store
+                    .append_staged_page(source, None, &catalog)
+                    .await
+                    .unwrap();
+            }
+            let selection = store
+                .select_provider_candidate(&ProviderCatalog::default(), &changes)
+                .await
+                .unwrap();
+            assert_eq!(
+                selection
+                    .accepted
+                    .completed_scans
+                    .iter()
+                    .map(|scan| scan.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["source-healthy"]
+            );
+            let rejected = selection
+                .rejected
+                .iter()
+                .flat_map(|(scans, _)| scans.iter().map(|scan| scan.as_str()))
+                .collect::<std::collections::BTreeSet<_>>();
+            assert_eq!(
+                rejected,
+                ["source-a", "source-b", "source-c"].into_iter().collect()
+            );
+            assert_eq!(selection.catalog.exchanges.len(), 1);
+            assert_eq!(
+                selection.catalog.exchanges[0].exchange_id.as_str(),
+                "exchange:healthy"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn source_removal_selects_exact_owner_and_scopes_without_prefix_peers() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = SqlxProviderSyncStore::open(directory.path().join("reference.sqlite"))
+            .await
+            .unwrap();
+        for source in [
+            "massive-options:SPY",
+            "massive-options:AAPL",
+            "massive-options-extra:SPY",
+            "massive-option:SPY",
+        ] {
+            store.clear_staged_pages(source).await.unwrap();
+        }
+        let scans = store.source_scan_ids("massive-options").await.unwrap();
+        assert_eq!(
+            scans.iter().map(|scan| scan.as_str()).collect::<Vec<_>>(),
+            vec![
+                "massive-options",
+                "massive-options:AAPL",
+                "massive-options:SPY"
+            ]
+        );
+    }
+
     async fn reconcile_candidate(
         catalog_store: &mut SqlxCatalogStore,
         provider_store: &mut SqlxProviderSyncStore,
         overlay: &ProviderCatalog,
         now: u64,
     ) -> crate::domain::ReferenceResult<TestRefresh> {
-        let incoming = provider_store.load_provider_candidate(overlay).await?;
+        // These storage fixtures explicitly finalize every scan they seeded.
+        let providers = sqlx::query_scalar::<_, String>(
+            "SELECT DISTINCT provider FROM reference_provider_staging",
+        )
+        .fetch_all(&provider_store.pool)
+        .await
+        .map_err(|error| crate::domain::ReferenceError::Persistence(error.to_string()))?;
+        let source_changes = crate::services::sources::SourceChanges {
+            completed_scans: providers
+                .into_iter()
+                .map(kairos_primitives::reference::ReferenceSourceId::new)
+                .collect::<Result<_, _>>()?,
+            removed_scans: Default::default(),
+        };
+        let incoming = provider_store
+            .load_provider_candidate(overlay, &source_changes)
+            .await?;
+        // Include the same validation as the production Actor, including in
+        // the million-row writer measurement below.
+        incoming.validate()?;
         let mut catalog = catalog_store.load().await?.unwrap_or_default();
         let previous_generation = catalog.generation;
-        let events = catalog.apply(incoming, now.into());
+        let events = catalog.apply_events(incoming, now.into());
         let result = TestRefresh {
             generation: catalog.generation,
             event_sequence: catalog.event_sequence,
@@ -42,12 +156,257 @@ mod tests {
             event_count: events.len(),
         };
         let identity = kairos_primitives::runtime::InstanceIdentity::unscoped("workspace:test")?;
-        let publications =
-            crate::services::publication::encode_publications(&catalog, &events, 1, &identity)?;
+        let publications = events.iter().map(|event| {
+            crate::services::publication::encode_publication(&catalog, &event, 1, &identity)
+        });
         catalog_store
-            .save_refresh(&catalog, &events, &publications)
+            .save_refresh(&catalog, events.iter(), publications, Some(&source_changes))
             .await?;
         Ok(result)
+    }
+
+    #[tokio::test]
+    async fn reconciliation_fixture_rejects_invalid_candidate_before_catalog_write() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("reference.sqlite");
+        let mut store = SqlxCatalogStore::open(&path).await.unwrap();
+        let mut providers = SqlxProviderSyncStore::open(&path).await.unwrap();
+        let invalid = ProviderCatalog {
+            assets: vec![crate::domain::Asset {
+                asset_id: kairos_primitives::reference::AssetId::new("asset:invalid").unwrap(),
+                code: Symbol::new("INVALID").unwrap(),
+                asset_class: kairos_primitives::reference::AssetClass::Unknown,
+                status: "active".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        providers
+            .save_last_good("invalid-source", &invalid)
+            .await
+            .unwrap();
+
+        let error = reconcile_candidate(&mut store, &mut providers, &ProviderCatalog::default(), 1)
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("unknown canonical class"));
+        let metrics = store.load_runtime_metrics().await.unwrap();
+        assert_eq!(metrics.asset_count, 0);
+        assert_eq!(metrics.lifecycle_event_count, 0);
+        let publications: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM reference_publication_outbox")
+                .fetch_one(&store.pool)
+                .await
+                .unwrap();
+        assert_eq!(publications, 0);
+    }
+
+    #[tokio::test]
+    async fn settlement_changes_commit_to_current_catalog_and_instrument_events() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("reference.sqlite");
+        let mut store = SqlxCatalogStore::open(&path).await.unwrap();
+        let mut providers = SqlxProviderSyncStore::open(&path).await.unwrap();
+        for (revision, currency) in [(1, "BTC"), (2, "USDT")] {
+            let asset_id =
+                kairos_primitives::reference::AssetId::new(format!("asset:crypto:{currency}"))
+                    .unwrap();
+            let incoming = ProviderCatalog {
+                assets: vec![crate::domain::Asset {
+                    asset_id: asset_id.clone(),
+                    code: Symbol::new(currency).unwrap(),
+                    asset_class: kairos_primitives::reference::AssetClass::Crypto,
+                    status: "active".into(),
+                    ..Default::default()
+                }],
+                instruments: vec![Instrument {
+                    instrument_id: InstrumentId::new("instrument:perpetual:test").unwrap(),
+                    symbol: Symbol::new("TEST").unwrap(),
+                    instrument_type: kairos_primitives::reference::InstrumentKind::Perpetual,
+                    settlement_asset_id: Some(asset_id.clone()),
+                    status: "active".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            incoming.validate().unwrap();
+            providers
+                .save_last_good("settlement-source", &incoming)
+                .await
+                .unwrap();
+            reconcile_candidate(
+                &mut store,
+                &mut providers,
+                &ProviderCatalog::default(),
+                revision,
+            )
+            .await
+            .unwrap();
+            let reader = kairos_reference_contract::ReferenceCatalog::open(&path).unwrap();
+            let instrument = reader
+                .instrument(&InstrumentId::new("instrument:perpetual:test").unwrap())
+                .unwrap()
+                .unwrap();
+            assert_eq!(instrument.settlement_asset_id.as_ref(), Some(&asset_id));
+            let payloads: Vec<Vec<u8>> = sqlx::query_scalar(
+                "SELECT payload FROM reference_publication_outbox ORDER BY sequence DESC",
+            )
+            .fetch_all(&store.pool)
+            .await
+            .unwrap();
+            let observed =
+                payloads
+                    .iter()
+                    .find_map(|payload| {
+                        match kairos_reference_contract::decode_event(payload).unwrap() {
+                            kairos_reference_contract::ReferenceEvent::InstrumentUpserted(
+                                event,
+                            ) => event.instrument().settlement_asset_id(),
+                            kairos_reference_contract::ReferenceEvent::InstrumentUpdated(event) => {
+                                event.instrument().settlement_asset_id()
+                            },
+                            _ => None,
+                        }
+                    });
+            assert_eq!(observed, Some(asset_id.as_str()));
+        }
+    }
+
+    #[tokio::test]
+    async fn late_publication_encoding_failure_rolls_back_catalog_and_outbox() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("reference.sqlite");
+        let mut store = SqlxCatalogStore::open(&path).await.unwrap();
+        let mut catalog = ReferenceCatalog::default();
+        let incoming = ProviderCatalog {
+            exchanges: vec![Exchange {
+                exchange_id: ExchangeId::new("exchange:rollback").unwrap(),
+                name: "Rollback test".into(),
+                status: "active".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let mut provider_store = SqlxProviderSyncStore::open(&path).await.unwrap();
+        provider_store
+            .save_last_good("rollback-source", &incoming)
+            .await
+            .unwrap();
+        let source_changes = crate::services::sources::SourceChanges {
+            completed_scans: [kairos_primitives::reference::ReferenceSourceId::new(
+                "rollback-source",
+            )
+            .unwrap()]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        let events = catalog.apply_events(incoming, 1.into());
+        let identity =
+            kairos_primitives::runtime::InstanceIdentity::unscoped("workspace:test").unwrap();
+        let publications = events
+            .iter()
+            .map(|event| {
+                crate::services::publication::encode_publication(&catalog, &event, 1, &identity)
+            })
+            .chain(std::iter::once(Err(
+                crate::domain::ReferenceError::Publication("injected late encoding failure".into()),
+            )));
+        assert!(
+            store
+                .save_refresh(&catalog, events.iter(), publications, Some(&source_changes))
+                .await
+                .is_err()
+        );
+        let counts: (i64, i64, i64) = sqlx::query_as(
+            "SELECT (SELECT COUNT(*) FROM reference_exchanges_current), (SELECT COUNT(*) FROM reference_lifecycle), (SELECT COUNT(*) FROM reference_publication_outbox)",
+        ).fetch_one(&store.pool).await.unwrap();
+        assert_eq!(counts, (0, 0, 0));
+        let watermark: (i64, i64) =
+            sqlx::query_as("SELECT generation,event_sequence FROM reference_meta")
+                .fetch_one(&store.pool)
+                .await
+                .unwrap();
+        assert_eq!(watermark, (0, 0));
+        assert!(
+            !provider_store
+                .has_last_good("rollback-source")
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            provider_store
+                .staged_pages("rollback-source")
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn withdrawn_canonical_venue_and_event_survive_reopen_without_exchange() {
+        use kairos_primitives::reference::{ReferenceStatus, VenueId};
+
+        use crate::domain::{Venue, VenueKind, VenueRole};
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("reference.sqlite");
+        let mut store = SqlxCatalogStore::open(&path).await.unwrap();
+        let mut catalog = ReferenceCatalog::default();
+        let venue_id = VenueId::new("venue:test-pts").unwrap();
+        let identity =
+            kairos_primitives::runtime::InstanceIdentity::unscoped("workspace:test").unwrap();
+        let incoming = ProviderCatalog {
+            venues: vec![Venue {
+                venue_id: venue_id.clone(),
+                name: "Test PTS".into(),
+                venue_kind: VenueKind::Pts,
+                roles: [VenueRole::Execution].into_iter().collect(),
+                mic: None,
+                operating_mic: None,
+                parent_venue_id: None,
+                jurisdiction: None,
+                status: ReferenceStatus::Active,
+            }],
+            ..Default::default()
+        };
+        for (incoming, now) in [(incoming, 10), (ProviderCatalog::default(), 20)] {
+            let events = catalog.apply(incoming, now.into());
+            let publications =
+                crate::services::publication::encode_publications(&catalog, &events, 1, &identity)
+                    .unwrap();
+            store
+                .save_refresh(
+                    &catalog,
+                    events.iter().cloned(),
+                    publications.iter().cloned().map(Ok),
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+        drop(store);
+        let mut store = SqlxCatalogStore::open(&path).await.unwrap();
+        let restored = store.load().await.unwrap().unwrap();
+        assert!(restored.exchanges.is_empty());
+        assert_eq!(restored.venues[&venue_id].status, ReferenceStatus::Inactive);
+        assert_eq!(restored.generation, catalog.generation);
+        assert_eq!(restored.event_sequence, catalog.event_sequence);
+        let mut outbox = SqlxPublicationOutbox::open(&path).await.unwrap();
+        let publications = outbox.pending_publications(10).await.unwrap();
+        assert_eq!(publications.len(), 2);
+        let event = kairos_reference_contract::decode_event(&publications[1].payload).unwrap();
+        let kairos_reference_contract::ReferenceEvent::VenueUpdated(event) = event else {
+            panic!("withdrawal must publish a typed Venue update");
+        };
+        assert_eq!(event.venue().venue_id(), venue_id.as_str());
+        assert_eq!(
+            event.venue().status(),
+            kairos_protocol::generated::kairos::reference::v_3::ReferenceLifecycleStatus::INACTIVE
+        );
+        assert_eq!(event.metadata().sequence(), restored.event_sequence.get());
     }
 
     #[tokio::test]
@@ -73,7 +432,12 @@ mod tests {
         {
             let mut store = SqlxCatalogStore::open(&path).await.unwrap();
             store
-                .save_refresh(&catalog, &events, &publications)
+                .save_refresh(
+                    &catalog,
+                    events.iter().cloned(),
+                    publications.iter().cloned().map(Ok),
+                    None,
+                )
                 .await
                 .unwrap();
         }
@@ -85,7 +449,12 @@ mod tests {
         // Idempotent refresh persistence must not inflate the materialized
         // counter when the event ID already exists in the outbox.
         reopened
-            .save_refresh(&catalog, &events, &publications)
+            .save_refresh(
+                &catalog,
+                events.iter().cloned(),
+                publications.iter().cloned().map(Ok),
+                None,
+            )
             .await
             .unwrap();
         assert_eq!(outbox.pending_event_count().await.unwrap(), 1);
@@ -153,9 +522,45 @@ mod tests {
             Err(error) => error.to_string(),
         };
         assert!(
-            error.contains("unsupported Reference SQLite schema version 1; expected 6"),
+            error.contains("unsupported Reference SQLite schema version 1; expected 10"),
             "unexpected error: {error}"
         );
+    }
+
+    #[tokio::test]
+    async fn schema_v8_migrates_pending_coverage_transition_storage() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("reference.sqlite");
+        let initialized = SqlxCatalogStore::open(&path).await.unwrap();
+        initialized.pool.close().await;
+        let url = format!("sqlite://{}?mode=rwc", path.display());
+        let legacy = sqlx::SqlitePool::connect(&url).await.unwrap();
+        sqlx::query("DROP TABLE reference_coverage_pending_transition")
+            .execute(&legacy)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE reference_meta SET schema_version=8 WHERE id=1")
+            .execute(&legacy)
+            .await
+            .unwrap();
+        legacy.close().await;
+
+        let migrated = SqlxCatalogStore::open(&path).await.unwrap();
+        let version =
+            sqlx::query_scalar::<_, i64>("SELECT schema_version FROM reference_meta WHERE id=1")
+                .fetch_one(&migrated.pool)
+                .await
+                .unwrap();
+        let table_count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM sqlite_master
+             WHERE type='table' AND name='reference_coverage_pending_transition'",
+        )
+        .fetch_one(&migrated.pool)
+        .await
+        .unwrap();
+
+        assert_eq!(version, 10);
+        assert_eq!(table_count, 1);
     }
 
     #[tokio::test]
@@ -184,7 +589,12 @@ mod tests {
                 .unwrap();
         let mut store = SqlxCatalogStore::open(&path).await.unwrap();
         store
-            .save_refresh(&catalog, &first, &first_publication)
+            .save_refresh(
+                &catalog,
+                first.iter().cloned(),
+                first_publication.iter().cloned().map(Ok),
+                None,
+            )
             .await
             .unwrap();
 
@@ -201,7 +611,12 @@ mod tests {
             crate::services::publication::encode_publications(&catalog, &second, 1, &identity)
                 .unwrap();
         store
-            .save_refresh(&catalog, &second, &second_publication)
+            .save_refresh(
+                &catalog,
+                second.iter().cloned(),
+                second_publication.iter().cloned().map(Ok),
+                None,
+            )
             .await
             .unwrap();
 
@@ -260,7 +675,12 @@ mod tests {
         };
         let mut catalog_store = SqlxCatalogStore::open(&path).await.unwrap();
         catalog_store
-            .save_refresh(&catalog, &events, &publications)
+            .save_refresh(
+                &catalog,
+                events.iter().cloned(),
+                publications.iter().cloned().map(Ok),
+                None,
+            )
             .await
             .unwrap();
 
@@ -302,6 +722,17 @@ mod tests {
             ..Default::default()
         };
         let catalog = ReferenceCatalog {
+            exchanges: [(
+                ExchangeId::new("binance").unwrap(),
+                Exchange {
+                    exchange_id: ExchangeId::new("binance").unwrap(),
+                    name: "Binance".into(),
+                    status: "active".into(),
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
             instruments: [(instrument_id, instrument)].into_iter().collect(),
             markets: [(market_id, market)].into_iter().collect(),
             generation: 3.into(),
@@ -309,7 +740,10 @@ mod tests {
             ..Default::default()
         };
         let mut store = SqlxCatalogStore::open(&path).await.unwrap();
-        let first_outcome = store.save_refresh(&catalog, &[], &[]).await.unwrap();
+        let first_outcome = store
+            .save_refresh(&catalog, std::iter::empty(), std::iter::empty(), None)
+            .await
+            .unwrap();
         assert_eq!(first_outcome.write_mode.as_str(), "full_replace");
         sqlx::query("CREATE TABLE reconcile_updates(count INTEGER NOT NULL)")
             .execute(&store.pool)
@@ -319,7 +753,10 @@ mod tests {
             .execute(&store.pool)
             .await
             .unwrap();
-        let second_outcome = store.save_refresh(&catalog, &[], &[]).await.unwrap();
+        let second_outcome = store
+            .save_refresh(&catalog, std::iter::empty(), std::iter::empty(), None)
+            .await
+            .unwrap();
         assert_eq!(second_outcome.write_mode.as_str(), "affected_update");
         assert_eq!(
             sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM reconcile_updates")
@@ -369,6 +806,55 @@ mod tests {
         assert_eq!(catalog_page.watermark.event_sequence, 5.into());
         assert_eq!(catalog_page.markets.len(), 1);
         assert_eq!(catalog_page.instruments.len(), 1);
+        let session = reader.read_session().unwrap();
+        let venues = session
+            .venues(&kairos_reference_contract::VenueSearchQuery {
+                venue_ids: Some(vec![
+                    kairos_primitives::reference::VenueId::new("venue:binance").unwrap(),
+                ]),
+                page: kairos_reference_contract::ReferencePage {
+                    limit: Some(10),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(venues.len(), 1);
+        assert!(
+            venues[0]
+                .roles
+                .contains(&kairos_reference_contract::VenueRole::Execution)
+        );
+        let v3_markets = session
+            .venue_markets(&kairos_reference_contract::VenueMarketSearchQuery {
+                market_ids: Some(vec![
+                    kairos_primitives::reference::MarketId::new("market:binance:btc-usdt").unwrap(),
+                ]),
+                page: kairos_reference_contract::ReferencePage {
+                    limit: Some(10),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(v3_markets[0].execution_venue_id.as_str(), "venue:binance");
+        let resolution = session
+            .resolve_market(&kairos_reference_contract::MarketResolutionQuery {
+                market_id: Some(
+                    kairos_primitives::reference::MarketId::new("market:binance:btc-usdt").unwrap(),
+                ),
+                active_only: true,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(resolution.candidate_count, 1);
+        let resolution = resolution.resolution.unwrap();
+        assert_eq!(resolution.instrument.symbol.as_str(), "BTC");
+        assert_eq!(resolution.venue.venue_id.as_str(), "venue:binance");
+        assert_eq!(
+            resolution.market.execution_venue_id,
+            resolution.venue.venue_id
+        );
     }
 
     #[tokio::test]
@@ -486,7 +972,7 @@ mod tests {
             .await
             .unwrap();
         provider_store
-            .promote_staged("massive-equity")
+            .staged_change_count("massive-equity")
             .await
             .unwrap();
 
@@ -513,7 +999,7 @@ mod tests {
         );
         assert_eq!(
             sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) FROM reference_provider_pending_promotion WHERE provider='massive-equity'",
+                "SELECT COUNT(*) FROM sqlite_master WHERE name='reference_provider_pending_promotion'",
             )
             .fetch_one(&catalog_store.pool)
             .await
@@ -663,7 +1149,14 @@ mod tests {
             .await
             .unwrap();
 
-        store.promote_staged("provider-a").await.unwrap();
+        store.staged_change_count("provider-a").await.unwrap();
+        // A catalog-only write must not publish a completed source scan that
+        // has not yet been reconciled into this catalog.
+        let committed = catalog_store.load().await.unwrap().unwrap();
+        catalog_store
+            .save_refresh(&committed, std::iter::empty(), std::iter::empty(), None)
+            .await
+            .unwrap();
         assert_eq!(
             store.load_last_good("provider-a").await.unwrap(),
             Some(page("provider:old", "active"))
@@ -688,7 +1181,131 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn promote_staged_reports_actual_provider_record_change_count() {
+    async fn schema_v9_upgrade_drops_promotion_marker_without_committing_staging() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("reference.sqlite");
+        let mut store = SqlxProviderSyncStore::open_legacy(&path).await.unwrap();
+        let catalog = |name: &str| ProviderCatalog {
+            exchanges: vec![Exchange {
+                exchange_id: ExchangeId::new("exchange:a").unwrap(),
+                name: name.into(),
+                status: "active".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        store
+            .save_last_good("provider-a", &catalog("committed"))
+            .await
+            .unwrap();
+        store
+            .append_staged_page("provider-a", None, &catalog("uncommitted"))
+            .await
+            .unwrap();
+        sqlx::raw_sql("CREATE TABLE reference_provider_pending_promotion(provider TEXT PRIMARY KEY,operation TEXT NOT NULL); INSERT INTO reference_provider_pending_promotion VALUES('provider-a','promote'); UPDATE reference_meta SET schema_version=9 WHERE id=1;")
+            .execute(&store.pool).await.unwrap();
+        drop(store);
+
+        let mut reopened = SqlxProviderSyncStore::open(&path).await.unwrap();
+        let current = reopened
+            .load_provider_candidate(
+                &ProviderCatalog::default(),
+                &crate::services::sources::SourceChanges::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(current.exchanges[0].name, "committed");
+        assert_eq!(
+            reopened.staged_pages("provider-a").await.unwrap()[0].exchanges[0].name,
+            "uncommitted"
+        );
+        assert_eq!(sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM sqlite_master WHERE name='reference_provider_pending_promotion'").fetch_one(&reopened.pool).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn source_commit_leaves_unselected_staged_source_uncommitted() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("reference.sqlite");
+        let mut provider_store = SqlxProviderSyncStore::open(&path).await.unwrap();
+        let mut catalog_store = SqlxCatalogStore::open(&path).await.unwrap();
+        let catalog = |id: &str| ProviderCatalog {
+            exchanges: vec![Exchange {
+                exchange_id: ExchangeId::new(id).unwrap(),
+                name: id.into(),
+                status: "active".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        provider_store
+            .save_last_good("provider-a", &catalog("exchange:a"))
+            .await
+            .unwrap();
+        let selected = crate::services::sources::SourceChanges {
+            completed_scans: std::collections::BTreeSet::from([
+                kairos_primitives::reference::ReferenceSourceId::new("provider-a").unwrap(),
+            ]),
+            removed_scans: Default::default(),
+        };
+        let incoming = provider_store
+            .load_provider_candidate(&ProviderCatalog::default(), &selected)
+            .await
+            .unwrap();
+        let mut candidate = ReferenceCatalog::default();
+        let events = candidate.apply(incoming, 1.into());
+        provider_store
+            .save_last_good("provider-b", &catalog("exchange:b"))
+            .await
+            .unwrap();
+
+        catalog_store
+            .save_refresh(
+                &candidate,
+                events.iter().cloned(),
+                std::iter::empty(),
+                Some(&selected),
+            )
+            .await
+            .unwrap();
+        assert!(
+            provider_store
+                .load_last_good("provider-a")
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            provider_store
+                .load_last_good("provider-b")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            catalog_store
+                .load_runtime_metrics()
+                .await
+                .unwrap()
+                .generation
+                .get(),
+            1
+        );
+
+        reconcile_candidate(
+            &mut catalog_store,
+            &mut provider_store,
+            &ProviderCatalog::default(),
+            2,
+        )
+        .await
+        .unwrap();
+        let reader = kairos_reference_contract::ReferenceCatalog::open(&path).unwrap();
+        assert!(reader.exchange("exchange:a").unwrap().is_some());
+        assert!(reader.exchange("exchange:b").unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn staged_change_count_reports_actual_provider_record_change_count() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("reference.sqlite");
         let exchange = |id: &str, status: &str| Exchange {
@@ -730,7 +1347,7 @@ mod tests {
             .await
             .unwrap();
 
-        let changed_count = store.promote_staged("provider-a").await.unwrap();
+        let changed_count = store.staged_change_count("provider-a").await.unwrap();
 
         assert_eq!(changed_count, 3);
     }
@@ -793,13 +1410,13 @@ mod tests {
         .await
         .unwrap();
         assert!(first.changed);
-        assert_eq!(first.event_count, 4);
+        assert_eq!(first.event_count, 7);
         assert_eq!(first.generation.get(), 1);
-        assert_eq!(first.event_sequence.get(), 4);
+        assert_eq!(first.event_sequence.get(), 7);
         assert_eq!(first.market_count, 1);
         let mut outbox = SqlxPublicationOutbox::open(&path).await.unwrap();
         let publications = outbox.pending_publications(10).await.unwrap();
-        assert_eq!(publications.len(), 4);
+        assert_eq!(publications.len(), 7);
         assert!(publications.iter().all(|event| {
             event.event_id.starts_with("reference:")
                 && kairos_reference_contract::decode_event(&event.payload).is_ok()
@@ -816,7 +1433,7 @@ mod tests {
         assert!(!second.changed);
         assert_eq!(second.event_count, 0);
         assert_eq!(second.generation.get(), 1);
-        assert_eq!(second.event_sequence.get(), 4);
+        assert_eq!(second.event_sequence.get(), 7);
     }
 
     #[tokio::test]
@@ -860,8 +1477,8 @@ mod tests {
         .await
         .unwrap_err()
         .to_string();
-        assert!(error.contains("irreconcilable canonical exchange conflict"));
-        let state = catalog_store.load_runtime_snapshot().await.unwrap();
+        assert!(error.contains("canonical exchange conflict"));
+        let state = catalog_store.load_runtime_metrics().await.unwrap();
         assert_eq!(state.generation.get(), 1);
         assert_eq!(state.event_sequence.get(), 1);
         assert!(
@@ -873,7 +1490,7 @@ mod tests {
         );
         assert_eq!(
             sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) FROM reference_provider_pending_promotion WHERE provider='provider-b'",
+                "SELECT COUNT(*) FROM reference_provider_staging WHERE provider='provider-b'",
             )
             .fetch_one(&provider_store.pool)
             .await
@@ -901,13 +1518,13 @@ mod tests {
         sqlx::query(
             "WITH RECURSIVE n(value) AS (SELECT 1 UNION ALL SELECT value+1 FROM n WHERE value<?) \
              INSERT INTO reference_provider_staging(provider,ordinal,record_kind,record_id,payload) \
-             SELECT 'scale',0,'asset',printf('asset:%07d',value),json_object('source_id',NULL,'asset_id',printf('asset:%07d',value),'code',printf('A%07d',value),'name',NULL,'asset_class','scale','status','active') FROM n",
+             SELECT 'scale',0,'asset',printf('asset:%07d',value),json_object('source_id',NULL,'asset_id',printf('asset:%07d',value),'code',printf('A%07d',value),'name',NULL,'asset_class','crypto','status','active') FROM n",
         )
         .bind(RECORDS)
         .execute(&provider_store.pool)
         .await
         .unwrap();
-        provider_store.promote_staged("scale").await.unwrap();
+        provider_store.staged_change_count("scale").await.unwrap();
         let before = process_rss_kib();
         let started = std::time::Instant::now();
         let mut catalog_store = SqlxCatalogStore::open(&path).await.unwrap();
@@ -1004,9 +1621,7 @@ mod tests {
             provider_id: kairos_primitives::market::Provider::new("massive").unwrap(),
             scope: SourceScope::underlying_instrument("instrument:equity:US:SPY:common"),
             desired_state: SourceDesiredState::Paused,
-            credential_binding: Some(
-                crate::domain::SourceCredentialBinding::new("massive.default").unwrap(),
-            ),
+            connection_id: Some(crate::domain::SourceConnectionId::new("massive-main").unwrap()),
             sync_policy: SourceSyncPolicy::ScopedSnapshot,
         };
         {
@@ -1025,6 +1640,33 @@ mod tests {
         assert_eq!(
             reopened.source_desired_states().await.unwrap(),
             vec![("massive-options".to_owned(), SourceDesiredState::Paused)]
+        );
+        let payload = sqlx::query_scalar::<_, String>(
+            "SELECT payload FROM reference_coverage_current WHERE source_id = 'massive-options'",
+        )
+        .fetch_one(&reopened.pool)
+        .await
+        .unwrap();
+        let coverage: kairos_reference_contract::ReferenceCoverage =
+            serde_json::from_str(&payload).unwrap();
+        assert_eq!(
+            coverage.state,
+            kairos_reference_contract::CoverageState::Paused
+        );
+        assert_eq!(
+            coverage.completeness,
+            kairos_reference_contract::CoverageCompleteness::Unknown
+        );
+        assert_eq!(
+            coverage.scope,
+            kairos_reference_contract::ReferenceCoverageScope::UnderlyingOptions {
+                underlying_instrument_ids: vec![
+                    kairos_primitives::reference::InstrumentId::new(
+                        "instrument:equity:US:SPY:common"
+                    )
+                    .unwrap()
+                ]
+            }
         );
     }
 

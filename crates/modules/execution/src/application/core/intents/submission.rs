@@ -69,21 +69,21 @@ impl ExecutionApplication {
         intent
             .algorithm
             .validate()
-            .map_err(ExecutionError::Invalid)?;
+            .map_err(ExecutionError::Intent)?;
         intent
             .order_options
             .split
             .as_ref()
             .map(SplitOrderPolicy::validate)
             .transpose()
-            .map_err(ExecutionError::Invalid)?;
+            .map_err(ExecutionError::Intent)?;
         intent
             .order_options
             .maker
             .as_ref()
             .map(MakerExecutionPolicy::validate)
             .transpose()
-            .map_err(ExecutionError::Invalid)?;
+            .map_err(ExecutionError::Intent)?;
         if intent.intent_type == IntentType::PairArbitrage {
             if intent.legs.len() < 2
                 || !intent.legs.iter().any(|leg| leg.side == OrderSide::Buy)
@@ -177,13 +177,13 @@ impl ExecutionApplication {
                 .as_ref()
                 .map(SplitOrderPolicy::validate)
                 .transpose()
-                .map_err(ExecutionError::Invalid)?;
+                .map_err(ExecutionError::Intent)?;
             leg.options
                 .maker
                 .as_ref()
                 .map(MakerExecutionPolicy::validate)
                 .transpose()
-                .map_err(ExecutionError::Invalid)?;
+                .map_err(ExecutionError::Intent)?;
         }
         let business_now = match (
             self.business_time_unix_nanos(),
@@ -214,7 +214,7 @@ impl ExecutionApplication {
         let planned_orders = if let Some(planner) = self.intent_planner.as_mut() {
             planner
                 .plan_intent(&intent)
-                .map_err(ExecutionError::Invalid)?
+                .map_err(ExecutionError::Admission)?
         } else if self.live_trading {
             return Err(ExecutionError::Invalid(
                 "live execution intent planning requires configured dependency facts".into(),
@@ -265,7 +265,7 @@ impl ExecutionApplication {
             self.actor.insert_intent(state.clone());
             self.actor
                 .insert_algorithm_run(AlgorithmRun::completed(intent.intent_id.clone()))
-                .map_err(ExecutionError::Invalid)?;
+                .map_err(ExecutionError::Algorithm)?;
             self.commit_intent(IntentEvent {
                 intent_id: intent.intent_id.clone(),
                 strategy_decision_id: intent.strategy_decision_id.clone(),
@@ -324,7 +324,7 @@ impl ExecutionApplication {
                 };
                 let hedge_target = spec
                     .required_hedge_quantity(leader_target)
-                    .map_err(ExecutionError::Invalid)?;
+                    .map_err(ExecutionError::Algorithm)?;
                 plan.legs
                     .iter_mut()
                     .find(|leg| leg.leg_id == policy.hedge_leg_id)
@@ -336,7 +336,7 @@ impl ExecutionApplication {
                     leader_target,
                     hedge_target,
                 )
-                .map_err(ExecutionError::Invalid)?;
+                .map_err(ExecutionError::Algorithm)?;
                 let (dormant, mut pending): (Vec<_>, Vec<_>) =
                     planned_orders.iter().cloned().partition(|order| {
                         intent_leg_id(&intent, order) == policy.hedge_leg_id.as_str()
@@ -376,7 +376,7 @@ impl ExecutionApplication {
                     // capability so a temporarily unavailable fallback can still recover.
                     candidate.ready = true;
                     super::super::orders::validate_execution_route(&fallback_request, &candidate)
-                        .map_err(ExecutionError::Invalid)?;
+                        .map_err(ExecutionError::Order)?;
                 }
                 if pending.iter().any(|order| order.limit_price.is_none()) {
                     return Err(ExecutionError::Invalid(
@@ -431,7 +431,7 @@ impl ExecutionApplication {
         self.actor.insert_intent(state.clone());
         self.actor
             .insert_algorithm_run(algorithm_run)
-            .map_err(ExecutionError::Invalid)?;
+            .map_err(ExecutionError::Algorithm)?;
         self.commit_intent(IntentEvent {
             intent_id: intent.intent_id.clone(),
             strategy_decision_id: intent.strategy_decision_id.clone(),
@@ -485,7 +485,7 @@ impl ExecutionApplication {
         if let Some(state) = self
             .actor
             .intent_for_idempotency_key(&idempotency_key)
-            .map_err(ExecutionError::Persistence)?
+            .map_err(ExecutionError::Intent)?
         {
             if state.intent != intent {
                 return Err(ExecutionError::Invalid(
@@ -626,7 +626,7 @@ fn attach_execution_benchmarks(
             observed_at_unix_nanos: observation.observed_at_unix_nanos,
         });
     }
-    run.validate().map_err(ExecutionError::Invalid)
+    run.validate().map_err(ExecutionError::Algorithm)
 }
 
 fn standard_algorithm_run(
@@ -642,7 +642,7 @@ fn standard_algorithm_run(
                 .iter()
                 .map(|leg| (leg.leg_id.clone(), leg.target_quantity)),
         )
-        .map_err(ExecutionError::Invalid),
+        .map_err(ExecutionError::Algorithm),
         ExecutionAlgorithmPolicy::Twap(policy) => {
             if plan.legs.len() != 1 || planned_orders.len() != policy.slice_count as usize {
                 return Err(ExecutionError::Invalid(
@@ -661,7 +661,7 @@ fn standard_algorithm_run(
                 },
                 leg.target_quantity,
             )
-            .map_err(ExecutionError::Invalid)
+            .map_err(ExecutionError::Algorithm)
         },
         ExecutionAlgorithmPolicy::PassiveLimit(policy) => {
             if intent.intent_type != IntentType::QuoteProvisioning {
@@ -688,7 +688,7 @@ fn standard_algorithm_run(
                     .iter()
                     .map(|leg| (leg.leg_id.clone(), leg.target_quantity)),
             )
-            .map_err(ExecutionError::Invalid)
+            .map_err(ExecutionError::Algorithm)
         },
         ExecutionAlgorithmPolicy::MakerTakerHedge(_) => Err(ExecutionError::Invalid(
             "maker-taker hedge must use the pair-arbitrage construction path".into(),

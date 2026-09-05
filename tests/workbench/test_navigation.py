@@ -150,6 +150,8 @@ def test_multi_segment_order_back_returns_through_segment_selection() -> None:
 
 
 def test_context_labels_are_derived_from_the_same_navigation_context() -> None:
+    assert context_label(("market", "missing")) == "首页 / 市场与标的 / 标的查询状态"
+    assert context_label(("market", "not-found")) == "首页 / 市场与标的 / 已覆盖范围内未找到"
     assert context_label(()) == "首页"
     assert context_label((), "trader") == "trader"
     assert context_label(("project",), "trader") == "trader / 项目管理"

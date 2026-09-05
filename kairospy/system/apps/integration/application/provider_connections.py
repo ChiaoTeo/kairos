@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 import re
 import tomllib
-from typing import Any
+from typing import Any, TypedDict
 from urllib.request import Request, urlopen
 
 from kairospy.system.apps.configuration.services.transactions import (
@@ -26,6 +26,15 @@ ConnectionProbe = Callable[
     [Mapping[str, object], Mapping[str, str]], Mapping[str, object]
 ]
 
+
+class ProviderCatalogEntry(TypedDict):
+    provider: str
+    default_endpoint: str
+    products: list[str]
+    purposes: list[str]
+    credential_fields: list[str]
+
+
 _PROVIDERS: Mapping[str, Mapping[str, object]] = {
     "massive": {
         "default_endpoint": "https://api.massive.com",
@@ -35,14 +44,32 @@ _PROVIDERS: Mapping[str, Mapping[str, object]] = {
     },
     "binance": {
         "default_endpoint": "https://api.binance.com",
-        "products": ("spot", "equity", "usd-m-futures", "coin-m-futures"),
-        "purposes": ("market-query", "market-stream", "account-read", "order-trade"),
+        "products": (
+            "spot",
+            "equity",
+            "usd-m-futures",
+            "coin-m-futures",
+            "options",
+        ),
+        "purposes": (
+            "reference-catalog",
+            "market-query",
+            "market-stream",
+            "account-read",
+            "order-trade",
+        ),
         "credential_fields": ("api_key", "api_secret"),
     },
     "okx": {
         "default_endpoint": "https://www.okx.com",
-        "products": ("spot", "swap", "futures", "options"),
-        "purposes": ("market-query", "market-stream", "account-read", "order-trade"),
+        "products": ("spot", "margin", "swap", "futures", "options"),
+        "purposes": (
+            "reference-catalog",
+            "market-query",
+            "market-stream",
+            "account-read",
+            "order-trade",
+        ),
         "credential_fields": ("api_key", "api_secret", "passphrase"),
     },
 }
@@ -69,15 +96,17 @@ class ProviderConnectionConfigurationApplication:
 
     workspace: Workspace
 
-    def catalog(self) -> tuple[dict[str, object], ...]:
+    def catalog(self) -> tuple[ProviderCatalogEntry, ...]:
         return tuple(
-            {
-                "provider": provider,
-                "default_endpoint": value["default_endpoint"],
-                "products": list(_sequence(value["products"])),
-                "purposes": list(_sequence(value["purposes"])),
-                "credential_fields": list(_sequence(value["credential_fields"])),
-            }
+            ProviderCatalogEntry(
+                provider=provider,
+                default_endpoint=str(value["default_endpoint"]),
+                products=[str(item) for item in _sequence(value["products"])],
+                purposes=[str(item) for item in _sequence(value["purposes"])],
+                credential_fields=[
+                    str(item) for item in _sequence(value["credential_fields"])
+                ],
+            )
             for provider, value in _PROVIDERS.items()
         )
 
@@ -499,7 +528,9 @@ class ProviderConnectionConfigurationApplication:
         ).hexdigest()
 
     def _path(self, connection_id: str) -> Path:
-        return self.workspace.paths.provider_connections_root() / f"{connection_id}.toml"
+        return (
+            self.workspace.paths.provider_connections_root() / f"{connection_id}.toml"
+        )
 
     def _evidence_path(self, connection_id: str) -> Path:
         return self.workspace.paths.child(

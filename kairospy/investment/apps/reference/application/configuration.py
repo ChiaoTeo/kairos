@@ -36,12 +36,10 @@ _CAPABILITIES = frozenset({"reference", "equity_market", "options"})
 class PreparedReferenceProvider:
     workspace: Workspace
     connection: Mapping[str, object]
-    document: str
     provider_connection: PreparedProviderConnection
 
     def stage(self, transaction: WorkspaceConfigurationTransaction) -> None:
         self.provider_connection.stage(transaction)
-        transaction.stage_text(self.workspace.paths.manifest, self.document)
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,10 +52,6 @@ class ReferenceProviderConfigurationApplication:
         try:
             self._provider_connections().show("massive")
         except KeyError:
-            value = self._massive_config()
-        else:
-            value = {"connection_id": "massive"}
-        if not value:
             return []
         return [self.show("massive")]
 
@@ -146,7 +140,6 @@ class ReferenceProviderConfigurationApplication:
             if not isinstance(fields, list) or "api_key" not in fields:
                 raise ValueError("Massive credential requires an api_key value")
 
-        document = self.workspace.paths.manifest.read_text(encoding="utf-8")
         products = ["equity"]
         purposes = ["reference-catalog"]
         if "equity_market" in selected:
@@ -169,11 +162,6 @@ class ReferenceProviderConfigurationApplication:
             credential_provider=credential_provider,
             credential_fields=("api_key",),
         )
-        document = _set_section(
-            document,
-            "reference.providers.massive",
-            {"enabled": True, "connection_id": "massive"},
-        )
         return PreparedReferenceProvider(
             self.workspace,
             {
@@ -186,7 +174,6 @@ class ReferenceProviderConfigurationApplication:
                 "configured": True,
                 "issues": [],
             },
-            document,
             provider_connection,
         )
 
@@ -307,16 +294,8 @@ class ReferenceProviderConfigurationApplication:
         _require_massive_id(connection_id)
         try:
             self._provider_connections().set_enabled(connection_id, enabled=enabled)
-        except KeyError:
-            current = dict(self._massive_config())
-            if not current:
-                raise KeyError("Massive data connection is not configured")
-            current["enabled"] = enabled
-        else:
-            current = {"enabled": enabled, "connection_id": connection_id}
-        document = self.workspace.paths.manifest.read_text(encoding="utf-8")
-        document = _set_section(document, "reference.providers.massive", current)
-        _write_atomic(self.workspace.paths.manifest, document)
+        except KeyError as error:
+            raise KeyError("Massive data connection is not configured") from error
         return self.show(connection_id)
 
     def delete(self, connection_id: str = "massive") -> dict[str, str]:
@@ -329,13 +308,9 @@ class ReferenceProviderConfigurationApplication:
             has_connection = False
         else:
             has_connection = True
-        if not has_connection and not self._massive_config():
+        if not has_connection:
             raise KeyError("Massive data connection is not configured")
-        document = self.workspace.paths.manifest.read_text(encoding="utf-8")
-        document = _set_section(document, "reference.providers.massive", None)
-        _write_atomic(self.workspace.paths.manifest, document)
-        if has_connection:
-            self._provider_connections().delete(connection_id)
+        self._provider_connections().delete(connection_id)
         self._evidence_path(connection_id).unlink(missing_ok=True)
         return {"connection_id": connection_id, "status": "deleted"}
 
@@ -454,20 +429,8 @@ class ReferenceProviderConfigurationApplication:
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
-    def _massive_config(self) -> Mapping[str, Any]:
-        value = tomllib.loads(self.workspace.paths.manifest.read_text(encoding="utf-8"))
-        reference = value.get("reference")
-        providers = (
-            reference.get("providers") if isinstance(reference, Mapping) else None
-        )
-        massive = providers.get("massive") if isinstance(providers, Mapping) else None
-        return massive if isinstance(massive, Mapping) else {}
-
     def _connection_config(self) -> Mapping[str, Any]:
-        try:
-            return self._provider_connections().show("massive")
-        except KeyError:
-            return self._massive_config()
+        return self._provider_connections().show("massive")
 
     def _configured_capabilities(
         self, connection: Mapping[str, Any] | None = None

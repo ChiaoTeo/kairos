@@ -61,7 +61,7 @@ impl ReferenceSource for ConfiguredProviderSource {
 
     async fn advance_workflow_with_connections(
         &mut self,
-        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        connections: &kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<ProviderCatalog> {
         match self {
             Self::BinanceSpot(source) => source.fetch_catalog_with_connections(connections).await,
@@ -83,7 +83,7 @@ impl ReferenceSource for ConfiguredProviderSource {
 
     async fn fetch_catalog_with_connections(
         &mut self,
-        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        connections: &kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<ProviderCatalog> {
         self.advance_workflow_with_connections(connections).await
     }
@@ -107,7 +107,7 @@ impl ReferenceSource for ConfiguredProviderSource {
 
     async fn advance_workflow_step_with_connections(
         &mut self,
-        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        connections: &kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<SourceUpdate> {
         match self {
             Self::BinanceSpot(source) => {
@@ -143,7 +143,7 @@ impl ReferenceSource for ConfiguredProviderSource {
 
     async fn fetch_catalog_step_with_connections(
         &mut self,
-        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        connections: &kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<SourceUpdate> {
         self.advance_workflow_step_with_connections(connections)
             .await
@@ -151,7 +151,7 @@ impl ReferenceSource for ConfiguredProviderSource {
 
     async fn advance_workflow_step_with_budget(
         &mut self,
-        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        connections: &kairos_conflux::ConnectionCollections<'_>,
         budget: SourceTickBudget,
     ) -> ReferenceResult<SourceUpdate> {
         match self {
@@ -174,7 +174,7 @@ impl ReferenceSource for ConfiguredProviderSource {
 
     async fn fetch_catalog_step_with_budget(
         &mut self,
-        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        connections: &kairos_conflux::ConnectionCollections<'_>,
         budget: SourceTickBudget,
     ) -> ReferenceResult<SourceUpdate> {
         self.advance_workflow_step_with_budget(connections, budget)
@@ -284,7 +284,7 @@ impl ReferenceSource for ConfiguredReferenceSource {
 
     async fn advance_workflow_with_connections(
         &mut self,
-        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        connections: &kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<ProviderCatalog> {
         self.inner
             .advance_workflow_with_connections(connections)
@@ -293,7 +293,7 @@ impl ReferenceSource for ConfiguredReferenceSource {
 
     async fn fetch_catalog_with_connections(
         &mut self,
-        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        connections: &kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<ProviderCatalog> {
         self.advance_workflow_with_connections(connections).await
     }
@@ -308,7 +308,7 @@ impl ReferenceSource for ConfiguredReferenceSource {
 
     async fn advance_workflow_step_with_connections(
         &mut self,
-        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        connections: &kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<SourceUpdate> {
         self.inner
             .advance_workflow_step_with_connections(connections)
@@ -317,7 +317,7 @@ impl ReferenceSource for ConfiguredReferenceSource {
 
     async fn fetch_catalog_step_with_connections(
         &mut self,
-        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        connections: &kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<SourceUpdate> {
         self.advance_workflow_step_with_connections(connections)
             .await
@@ -325,7 +325,7 @@ impl ReferenceSource for ConfiguredReferenceSource {
 
     async fn advance_workflow_step_with_budget(
         &mut self,
-        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        connections: &kairos_conflux::ConnectionCollections<'_>,
         budget: SourceTickBudget,
     ) -> ReferenceResult<SourceUpdate> {
         self.inner
@@ -335,7 +335,7 @@ impl ReferenceSource for ConfiguredReferenceSource {
 
     async fn fetch_catalog_step_with_budget(
         &mut self,
-        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        connections: &kairos_conflux::ConnectionCollections<'_>,
         budget: SourceTickBudget,
     ) -> ReferenceResult<SourceUpdate> {
         self.advance_workflow_step_with_budget(connections, budget)
@@ -352,7 +352,7 @@ impl ReferenceSource for ConfiguredReferenceSource {
     async fn advance_source_with_connections(
         &mut self,
         source_id: &str,
-        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        connections: &kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<Option<ProviderCatalog>> {
         self.inner
             .advance_source_with_connections(source_id, connections)
@@ -362,7 +362,7 @@ impl ReferenceSource for ConfiguredReferenceSource {
     async fn advance_source_with_budget(
         &mut self,
         source_id: &str,
-        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        connections: &kairos_conflux::ConnectionCollections<'_>,
         budget: SourceTickBudget,
     ) -> ReferenceResult<Option<ProviderCatalog>> {
         self.inner
@@ -428,8 +428,20 @@ impl ReferenceSource for ConfiguredReferenceSource {
         self.inner.source_health()
     }
 
-    fn mark_promotions_committed(&mut self) {
-        self.inner.mark_promotions_committed();
+    fn mark_sources_committed(&mut self, committed: &super::SourceChanges) {
+        self.inner.mark_sources_committed(committed);
+    }
+
+    async fn note_rejected_scans(
+        &mut self,
+        rejected: &super::SourceChanges,
+        error: &ReferenceError,
+    ) -> ReferenceResult<()> {
+        self.inner.note_rejected_scans(rejected, error).await
+    }
+
+    fn staged_source_changes(&self) -> super::SourceChanges {
+        self.inner.staged_source_changes()
     }
 }
 

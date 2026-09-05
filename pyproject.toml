@@ -109,6 +109,10 @@ py-limited-api = "cp311"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not rust_interop'"
+markers = [
+    "rust_interop: cross-language acceptance tests that build Rust fixture executables",
+]
 
 [tool.ruff]
 target-version = "py311"

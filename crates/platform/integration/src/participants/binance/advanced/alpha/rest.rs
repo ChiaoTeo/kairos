@@ -12,7 +12,7 @@ use crate::{
 rest_connection!(BinanceAlphaTradingRestConnection, "advanced.alpha.rest");
 
 impl InstrumentCatalogQuery for BinanceAlphaTradingRestConnection {
-    async fn fetch_instruments(&mut self) -> Result<ExternalInstrumentCatalog, IntegrationError> {
+    async fn fetch_instruments(&self) -> Result<ExternalInstrumentCatalog, IntegrationError> {
         let value = self
             .service
             .public_get("/bapi/defi/v1/public/alpha-trade/get-exchange-info", &[])
@@ -20,11 +20,12 @@ impl InstrumentCatalogQuery for BinanceAlphaTradingRestConnection {
         Ok(ExternalInstrumentCatalog {
             participant: participant(),
             instruments: market::spot_instruments(data(&value))?,
+            venues: Vec::new(),
         })
     }
 
     async fn fetch_instruments_page(
-        &mut self,
+        &self,
         cursor: Option<&str>,
         limit: usize,
     ) -> Result<ExternalInstrumentCatalogPage, IntegrationError> {
@@ -33,6 +34,7 @@ impl InstrumentCatalogQuery for BinanceAlphaTradingRestConnection {
                 catalog: ExternalInstrumentCatalog {
                     participant: participant(),
                     instruments: Vec::new(),
+                    venues: Vec::new(),
                 },
                 next_cursor: None,
                 complete: true,

@@ -29,6 +29,12 @@ pub struct ReferenceReadModel {
     pub(crate) legacy_exchange_listing_id_count: usize,
     pub(crate) option_listing_count: usize,
     pub(crate) option_market_count: usize,
+    pub(crate) coverage_count: usize,
+    pub(crate) usable_coverage_count: usize,
+    pub(crate) stale_coverage_count: usize,
+    pub(crate) unavailable_coverage_count: usize,
+    pub(crate) unresolved_venue_mapping_count: usize,
+    pub(crate) v2_unprojectable_market_count: usize,
     pub(crate) source_health: Vec<SourceHealth>,
     pub(crate) outbox_depth: usize,
     pub(crate) oldest_pending_publication_event_id: Option<String>,
@@ -63,6 +69,12 @@ impl ReferenceApplication {
             legacy_exchange_listing_id_count: self.actor.metadata.legacy_exchange_listing_id_count,
             option_listing_count: self.actor.metadata.option_listing_count,
             option_market_count: self.actor.metadata.option_market_count,
+            coverage_count: self.actor.metadata.coverage_count,
+            usable_coverage_count: self.actor.metadata.usable_coverage_count,
+            stale_coverage_count: self.actor.metadata.stale_coverage_count,
+            unavailable_coverage_count: self.actor.metadata.unavailable_coverage_count,
+            unresolved_venue_mapping_count: self.actor.metadata.unresolved_venue_mapping_count,
+            v2_unprojectable_market_count: self.actor.metadata.v2_unprojectable_market_count,
             source_health: self.source_health(),
             outbox_depth,
             oldest_pending_publication_event_id,
@@ -149,5 +161,24 @@ impl ReferenceReadModel {
 
     pub fn option_market_count(&self) -> usize {
         self.option_market_count
+    }
+
+    pub fn coverage_count(&self) -> usize {
+        self.coverage_count
+    }
+    pub fn usable_coverage_count(&self) -> usize {
+        self.usable_coverage_count
+    }
+    pub fn stale_coverage_count(&self) -> usize {
+        self.stale_coverage_count
+    }
+    pub fn unavailable_coverage_count(&self) -> usize {
+        self.unavailable_coverage_count
+    }
+    pub fn unresolved_venue_mapping_count(&self) -> usize {
+        self.unresolved_venue_mapping_count
+    }
+    pub fn v2_unprojectable_market_count(&self) -> usize {
+        self.v2_unprojectable_market_count
     }
 }

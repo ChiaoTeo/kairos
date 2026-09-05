@@ -8,6 +8,7 @@ use crate::text::text_type;
 
 text_type!(Symbol);
 text_type!(ExchangeId);
+text_type!(VenueId);
 text_type!(AssetId);
 text_type!(ListingId);
 text_type!(IssuerId);
@@ -20,6 +21,72 @@ text_type!(MarketId);
 // Opaque Reference runtime/configuration binding identity, intentionally
 // distinct from a Market data Provider.
 text_type!(ReferenceSourceId);
+text_type!(ReferenceCoverageId);
+
+macro_rules! fixed_uppercase_code {
+    ($name:ident, $length:literal, $reason:literal) => {
+        #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Hash, Serialize)]
+        #[serde(transparent)]
+        pub struct $name(String);
+
+        impl $name {
+            pub fn new(value: impl Into<String>) -> Result<Self, DomainTypeError> {
+                let value = value.into();
+                if value.len() != $length
+                    || !value
+                        .bytes()
+                        .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
+                {
+                    return Err(DomainTypeError::Invalid {
+                        type_name: stringify!($name),
+                        reason: $reason,
+                    });
+                }
+                Ok(Self(value))
+            }
+
+            pub fn as_str(&self) -> &str {
+                &self.0
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                Self::new(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+            }
+        }
+
+        impl AsRef<str> for $name {
+            fn as_ref(&self) -> &str {
+                self.as_str()
+            }
+        }
+
+        impl std::ops::Deref for $name {
+            type Target = str;
+
+            fn deref(&self) -> &Self::Target {
+                self.as_str()
+            }
+        }
+
+        impl fmt::Display for $name {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str(self.as_str())
+            }
+        }
+    };
+}
+
+fixed_uppercase_code!(Mic, 4, "MIC must be four uppercase ASCII letters or digits");
+fixed_uppercase_code!(
+    JurisdictionCode,
+    2,
+    "jurisdiction must be a two-character uppercase code"
+);
 
 macro_rules! legacy_default {
     ($name:ident, $value:literal) => {
@@ -37,6 +104,12 @@ impl Default for ExchangeId {
     }
 }
 
+impl Default for VenueId {
+    fn default() -> Self {
+        Self::new("venue:unknown").expect("canonical default venue is valid")
+    }
+}
+
 legacy_default!(InstrumentId, "instrument:unresolved");
 legacy_default!(ListingId, "listing:unresolved");
 legacy_default!(MarketId, "market:unresolved");
@@ -45,6 +118,10 @@ legacy_default!(AssetId, "asset:unresolved");
 
 fn exchange_key(exchange: &ExchangeId) -> &str {
     exchange.as_str().trim_start_matches("exchange:")
+}
+
+fn venue_key(venue: &VenueId) -> &str {
+    venue.as_str().trim_start_matches("venue:")
 }
 
 impl InstrumentId {
@@ -58,6 +135,21 @@ impl InstrumentId {
 }
 
 impl ListingId {
+    /// Canonical listing identity for a listing venue. The instrument remains
+    /// independent of where it is admitted to listing.
+    pub fn listing_venue(
+        venue: &VenueId,
+        kind: InstrumentKind,
+        listing_key: impl AsRef<str>,
+    ) -> Result<Self, DomainTypeError> {
+        Self::new(format!(
+            "listing:{}:{}:{}",
+            venue_key(venue),
+            kind.as_str(),
+            listing_key.as_ref().to_ascii_uppercase()
+        ))
+    }
+
     /// Canonical venue listing identity. Quote/currency context belongs to a market.
     pub fn venue(
         exchange: &ExchangeId,
@@ -88,6 +180,21 @@ impl ListingId {
 }
 
 impl MarketId {
+    /// Canonical market identity for one independently addressable execution
+    /// venue or facility.
+    pub fn execution_venue(
+        venue: &VenueId,
+        kind: InstrumentKind,
+        market_key: impl AsRef<str>,
+    ) -> Result<Self, DomainTypeError> {
+        Self::new(format!(
+            "market:{}:{}:{}",
+            venue_key(venue),
+            kind.as_str(),
+            market_key.as_ref().to_ascii_uppercase()
+        ))
+    }
+
     /// Canonical venue market identity for an observable/tradable entry point.
     pub fn venue(
         exchange: &ExchangeId,

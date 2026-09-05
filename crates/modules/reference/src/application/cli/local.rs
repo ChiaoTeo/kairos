@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use kairos_reference_contract::{
     Asset, AssetCatalogQuery, Exchange, ExchangeCatalogQuery, Instrument, InstrumentSearchQuery,
     LifecycleEntry, Listing, ListingCatalogQuery, Market, MarketSearchQuery, ReferenceCatalog,
-    ReferenceCatalogSnapshot, ReferenceCatalogStats, ReferenceIntegrityStats,
+    ReferenceCatalogStats, ReferenceIntegrityStats, ReferencePage,
 };
 use kairos_workspace::workspace::Workspace;
 use serde::Serialize;
@@ -49,6 +49,15 @@ pub enum ReferenceCliOutput {
     Status(ReferenceCatalogStatusResult),
     Record(ReferenceCatalogRecord),
     Records(Vec<ReferenceCatalogRecord>),
+}
+
+#[derive(Default)]
+struct ReferenceCatalogRecords {
+    exchanges: Vec<Exchange>,
+    assets: Vec<Asset>,
+    instruments: Vec<Instrument>,
+    listings: Vec<Listing>,
+    markets: Vec<Market>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -109,35 +118,37 @@ impl CliReferenceApplication {
         }))
     }
 
-    pub fn diagnostic_snapshot(
+    fn diagnostic_records(
         &self,
-    ) -> Result<ReferenceCatalogSnapshot, Box<dyn std::error::Error>> {
+        limit: usize,
+    ) -> Result<ReferenceCatalogRecords, Box<dyn std::error::Error>> {
         let reader = ReferenceCatalog::open(&self.database)?;
         let session = reader.read_session()?;
-        let watermark = session.watermark();
-        Ok(ReferenceCatalogSnapshot {
-            generation: watermark.generation,
-            event_sequence: watermark.event_sequence,
-            exchanges: session.exchanges(&ExchangeCatalogQuery::default())?,
-            assets: session.assets(&AssetCatalogQuery::default())?,
-            instruments: session.instruments(&InstrumentSearchQuery::default())?,
-            listings: session.listings(&ListingCatalogQuery::default())?,
-            markets: session.markets(&MarketSearchQuery::default())?,
-            lifecycle_events: reader
-                .lifecycle_events_after(0.into(), 10_000)?
-                .into_iter()
-                .map(|event| LifecycleEntry {
-                    event_id: event.event_id,
-                    event_type: event.event_type,
-                    event_time_unix_nanos: event.event_time_unix_nanos,
-                    record_kind: event.record_kind,
-                    record_id: event.record_id,
-                    operation: event.operation,
-                    provenance: event.provenance,
-                    conflict_policy: event.conflict_policy,
-                })
-                .collect(),
-            ..Default::default()
+        let page = ReferencePage {
+            limit: Some(limit.clamp(1, 10_000) as u64),
+            offset: 0,
+        };
+        Ok(ReferenceCatalogRecords {
+            exchanges: session.exchanges(&ExchangeCatalogQuery {
+                page: page.clone(),
+                ..Default::default()
+            })?,
+            assets: session.assets(&AssetCatalogQuery {
+                page: page.clone(),
+                ..Default::default()
+            })?,
+            instruments: session.instruments(&InstrumentSearchQuery {
+                page: page.clone(),
+                ..Default::default()
+            })?,
+            listings: session.listings(&ListingCatalogQuery {
+                page: page.clone(),
+                ..Default::default()
+            })?,
+            markets: session.markets(&MarketSearchQuery {
+                page,
+                ..Default::default()
+            })?,
         })
     }
 
@@ -146,7 +157,7 @@ impl CliReferenceApplication {
         collection: ReferenceCatalogCollection,
         request: ReferenceCatalogListRequest,
     ) -> Result<ReferenceCliOutput, Box<dyn std::error::Error>> {
-        let snapshot = self.diagnostic_snapshot()?;
+        let snapshot = self.diagnostic_records(request.limit)?;
         let records = match collection {
             ReferenceCatalogCollection::Exchanges => snapshot
                 .exchanges
@@ -202,7 +213,7 @@ impl CliReferenceApplication {
         request: ReferenceMarketCatalogRequest,
         resolve: bool,
     ) -> Result<ReferenceCliOutput, Box<dyn std::error::Error>> {
-        let snapshot = self.diagnostic_snapshot()?;
+        let snapshot = self.diagnostic_records(request.limit.unwrap_or(256))?;
         let values = filter_markets(snapshot.markets, request);
         if resolve {
             match values.as_slice() {
@@ -226,7 +237,7 @@ impl CliReferenceApplication {
         &self,
         request: ReferenceOptionChainRequest,
     ) -> Result<ReferenceCliOutput, Box<dyn std::error::Error>> {
-        let snapshot = self.diagnostic_snapshot()?;
+        let snapshot = self.diagnostic_records(request.limit)?;
         let limit = request.limit.clamp(1, 10_000);
         let mut values = snapshot.instruments;
         values.retain(|value| {
@@ -269,7 +280,7 @@ impl CliReferenceApplication {
         kind: ReferenceKind,
         query: ReferenceQuery,
     ) -> Result<ReferenceCliOutput, Box<dyn std::error::Error>> {
-        let snapshot = self.diagnostic_snapshot()?;
+        let snapshot = self.diagnostic_records(query.limit.unwrap_or(256))?;
         read_query(&snapshot, kind, query)
     }
 
@@ -292,7 +303,7 @@ impl CliReferenceApplication {
         &self,
         identifier: &str,
     ) -> Result<Option<ReferenceCliOutput>, Box<dyn std::error::Error>> {
-        let snapshot = self.diagnostic_snapshot()?;
+        let snapshot = self.diagnostic_records(10_000)?;
         Ok(find_record(&snapshot, identifier).map(ReferenceCliOutput::Record))
     }
 }
@@ -306,7 +317,7 @@ pub enum ReferenceCatalogCollection {
 }
 
 fn read_query(
-    snapshot: &ReferenceCatalogSnapshot,
+    snapshot: &ReferenceCatalogRecords,
     kind: ReferenceKind,
     query: ReferenceQuery,
 ) -> Result<ReferenceCliOutput, Box<dyn std::error::Error>> {
@@ -327,7 +338,7 @@ fn read_query(
 }
 
 fn snapshot_collections(
-    snapshot: &ReferenceCatalogSnapshot,
+    snapshot: &ReferenceCatalogRecords,
     kind: ReferenceKind,
 ) -> Vec<Vec<ReferenceCatalogRecord>> {
     let mut all = Vec::new();
@@ -401,7 +412,7 @@ fn filter_markets(mut values: Vec<Market>, request: ReferenceMarketCatalogReques
 }
 
 fn find_record(
-    snapshot: &ReferenceCatalogSnapshot,
+    snapshot: &ReferenceCatalogRecords,
     identifier: &str,
 ) -> Option<ReferenceCatalogRecord> {
     snapshot_collections(snapshot, ReferenceKind::All)

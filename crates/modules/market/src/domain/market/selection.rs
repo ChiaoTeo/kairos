@@ -1,7 +1,5 @@
 use kairos_primitives::decimal::Price;
-use kairos_primitives::reference::{
-    AssetClass, ExchangeId, InstrumentId, InstrumentKind, MarketId,
-};
+use kairos_primitives::reference::{AssetClass, InstrumentId, InstrumentKind, MarketId, VenueId};
 use kairos_primitives::time::UnixNanos;
 use serde::{Deserialize, Serialize};
 
@@ -10,7 +8,7 @@ use super::ResolvedMarket;
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct MarketSelectionQuery {
     pub market_id: Option<MarketId>,
-    pub exchange_id: Option<ExchangeId>,
+    pub execution_venue_id: Option<VenueId>,
     pub instrument_kind: Option<InstrumentKind>,
     pub asset_type: Option<AssetClass>,
     #[serde(default)]
@@ -35,9 +33,9 @@ impl MarketSelectionQuery {
             .as_deref()
             .is_some_and(|value| market.market_id().map(|id| id.as_str()) != Some(value))
             || self
-                .exchange_id
+                .execution_venue_id
                 .as_ref()
-                .is_some_and(|value| market.exchange_id.as_ref() != Some(value))
+                .is_some_and(|value| market.execution_venue_id.as_ref() != Some(value))
             || self
                 .instrument_kind
                 .is_some_and(|value| value != market.instrument_kind)

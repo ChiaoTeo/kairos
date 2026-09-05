@@ -13,10 +13,10 @@ use crate::domain::{
     CommitmentStatus, CompletionPolicy, ExecutionAlgorithmPolicy, ExecutionAlgorithmSpec,
     ExecutionAuditEvent, ExecutionAuditQuery, ExecutionFill, ExecutionLeg,
     ExecutionOperationalHealth, ExecutionOrder, ExecutionOrderStatus, ExecutionPlan, FailurePolicy,
-    IntentType, MakerExecutionPolicy, MakerTakerHedgeSpec, OrderCommitment, OrderSide, OrderType,
-    PassiveLimitSpec, RemoteOrderUpdate, RiskReservationEvidence, RiskReservationSagaStatus,
-    SplitOrderPolicy, TwapSpec, decide_immediate, decide_maker_taker_hedge, decide_passive_limit,
-    decide_twap, split_quantity,
+    IntentType, MakerExecutionPolicy, MakerTakerHedgeSpec, OrderCommitment, OrderError, OrderSide,
+    OrderType, PassiveLimitSpec, RemoteOrderUpdate, RiskReservationEvidence,
+    RiskReservationSagaStatus, SplitOrderPolicy, TwapSpec, decide_immediate,
+    decide_maker_taker_hedge, decide_passive_limit, decide_twap, split_quantity,
 };
 use crate::services::dependencies::{ExecutionOrderAdmissionService, QueuedExecutionIntentPlanner};
 use crate::services::risk::QueuedExecutionRiskReservations;
@@ -46,7 +46,7 @@ fn simulation_commitment(
         CommitmentBasis::SimulationQuantity,
         now.into(),
     )
-    .map_err(ExecutionError::Invalid)?;
+    .map_err(ExecutionError::Order)?;
     commitment.settlement_asset = request
         .options
         .quote_asset
@@ -174,23 +174,15 @@ impl ExecutionApplication {
     /// Advance the durable ExecutionActor business clock and the planning
     /// dependency context from the same explicit time input.
     pub fn advance_time(&mut self, event_time_unix_nanos: u64) -> Result<(), ExecutionError> {
-        if let Some(current) = self.actor.business_time_unix_nanos() {
-            if event_time_unix_nanos < current.get() {
-                return Err(ExecutionError::Invalid(format!(
-                    "execution business time cannot move backwards: current={}, requested={event_time_unix_nanos}",
-                    current.get()
-                )));
-            }
-        }
         if let Some(intent_planner) = self.intent_planner.as_mut() {
             intent_planner
                 .advance_time(event_time_unix_nanos)
-                .map_err(ExecutionError::Invalid)?;
+                .map_err(ExecutionError::Admission)?;
         }
         if self
             .actor
             .advance_business_time(event_time_unix_nanos.into())
-            .map_err(ExecutionError::Invalid)?
+            .map_err(ExecutionError::Runtime)?
         {
             self.persist_snapshot()?;
         }
@@ -261,11 +253,11 @@ impl ExecutionApplication {
                 application
                     .actor
                     .restore_algorithm_runs(snapshot.algorithm_runs)
-                    .map_err(ExecutionError::Persistence)?;
+                    .map_err(ExecutionError::Algorithm)?;
                 recovered_algorithm_state = application
                     .actor
                     .synchronize_all_algorithm_runs()
-                    .map_err(ExecutionError::Persistence)?;
+                    .map_err(ExecutionError::Algorithm)?;
                 info!(
                     event = "execution_state_restored",
                     component = "execution",
@@ -474,7 +466,7 @@ impl ExecutionApplication {
     pub(crate) fn attach_intent_planner(
         &mut self,
         mut planner: QueuedExecutionIntentPlanner,
-    ) -> Result<(), String> {
+    ) -> Result<(), crate::domain::AdmissionError> {
         if let Some(business_time) = self.actor.business_time_unix_nanos() {
             planner.advance_time(business_time.get())?;
         }
@@ -603,21 +595,31 @@ fn to_connection_request(
     segment_key: &str,
     options: &ExecutionOrderOptions,
     execution_routes: &BTreeMap<ExecutionRouteId, ConfiguredExecutionRoute>,
-) -> Result<OrderEntryRequest, String> {
-    let access_id = order.execution_route_id.as_ref().ok_or_else(|| {
-        "execution_route_id is required; provider identity is not inferred".to_string()
-    })?;
+) -> Result<OrderEntryRequest, OrderError> {
+    let access_id =
+        order
+            .execution_route_id
+            .as_ref()
+            .ok_or_else(|| OrderError::MissingExecutionRoute {
+                order_id: order.order_id.clone(),
+            })?;
     let participant_instrument = execution_routes
         .get(access_id)
         .map(|route| route.participant_instrument.clone())
-        .ok_or_else(|| format!("execution access is not configured: {access_id}"))?;
+        .ok_or_else(|| OrderError::RouteNotConfigured {
+            route_id: access_id.to_string(),
+        })?;
     Ok(OrderEntryRequest {
         order_id: order.order_id.clone(),
         intent_id: order.intent_id.clone(),
         submitted_at_unix_nanos: order.submitted_at_unix_nanos,
         account_id: order.account_id.clone(),
-        segment_key: kairos_primitives::account::SegmentKey::new(segment_key)
-            .map_err(|error| error.to_string())?,
+        segment_key: kairos_primitives::account::SegmentKey::new(segment_key).map_err(
+            |source| OrderError::InvalidSemantic {
+                field: "segment_key",
+                source,
+            },
+        )?,
         instrument_id: order.instrument_id.clone(),
         market_id: order.market_id.clone(),
         participant_instrument,
@@ -650,13 +652,15 @@ fn to_connection_request(
     })
 }
 
-fn parse_time_in_force(value: &str) -> Result<TimeInForce, String> {
+fn parse_time_in_force(value: &str) -> Result<TimeInForce, OrderError> {
     match value.trim().to_ascii_uppercase().as_str() {
         "GTC" | "GOOD_TIL_CANCELED" => Ok(TimeInForce::GoodTilCanceled),
         "IOC" | "IMMEDIATE_OR_CANCEL" => Ok(TimeInForce::ImmediateOrCancel),
         "FOK" | "FILL_OR_KILL" => Ok(TimeInForce::FillOrKill),
         "DAY" => Ok(TimeInForce::Day),
-        _ => Err(format!("unsupported time_in_force: {value}")),
+        _ => Err(OrderError::UnsupportedTimeInForce {
+            value: value.to_owned(),
+        }),
     }
 }
 
@@ -679,7 +683,7 @@ fn expand_child_orders(
                 min_child_quantity: None,
             },
         )
-        .map_err(|error| ExecutionError::Invalid(format!("TWAP {}: {error}", order.order_id)))?;
+        .map_err(ExecutionError::Intent)?;
         return chunks
             .into_iter()
             .enumerate()
@@ -698,9 +702,7 @@ fn expand_child_orders(
             expanded.push(order);
             continue;
         };
-        let chunks = split_quantity(order.quantity, policy).map_err(|error| {
-            ExecutionError::Invalid(format!("split {}: {error}", order.order_id))
-        })?;
+        let chunks = split_quantity(order.quantity, policy).map_err(ExecutionError::Intent)?;
         if chunks.len() == 1 {
             expanded.push(order);
             continue;
@@ -823,7 +825,7 @@ fn build_single_intent_plan(
                 order.side,
                 target_quantity,
             )
-            .map_err(ExecutionError::Invalid)?;
+            .map_err(ExecutionError::Intent)?;
             leg.market_id = order.market_id.clone();
             Ok(leg)
         })
@@ -836,7 +838,7 @@ fn build_single_intent_plan(
         intent.completion_policy,
         intent.failure_policy,
     )
-    .map_err(ExecutionError::Invalid)
+    .map_err(ExecutionError::Intent)
 }
 
 fn remote_order(order: kairos_integration::ExternalOrder) -> RemoteOrder {

@@ -17,6 +17,7 @@ pub(crate) enum SourceScheduleDecision {
 pub(crate) enum SourceScheduleSkipReason {
     Inactive,
     RetryWaiting,
+    CommitPending,
     TickSourceBudget,
     TickWallClockBudget,
 }
@@ -26,6 +27,7 @@ impl SourceScheduleSkipReason {
         match self {
             Self::Inactive => "inactive",
             Self::RetryWaiting => "retry_waiting",
+            Self::CommitPending => "commit_pending",
             Self::TickSourceBudget => "tick_source_budget",
             Self::TickWallClockBudget => "tick_wall_clock_budget",
         }
@@ -39,9 +41,12 @@ impl SourceScheduleSkipReason {
             Self::RetryWaiting => {
                 ReferenceError::Provider(format!("{source_id}: provider retry window is waiting"))
             },
-            Self::TickSourceBudget | Self::TickWallClockBudget => ReferenceError::Provider(
-                format!("{source_id}: source refresh skipped: {}", self.as_str()),
-            ),
+            Self::CommitPending | Self::TickSourceBudget | Self::TickWallClockBudget => {
+                ReferenceError::Provider(format!(
+                    "{source_id}: source refresh skipped: {}",
+                    self.as_str()
+                ))
+            },
         }
     }
 }

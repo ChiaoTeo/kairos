@@ -1,0 +1,6 @@
+include "../../../v2/common/metadata.fbs";
+include "../types/provider_catalog_membership.fbs";
+namespace kairos.reference.v3;
+table ProviderCatalogMembershipUpserted { metadata:kairos.common.v2.EventMetadata (required); catalog_revision:ulong; membership:ProviderCatalogMembership (required); }
+root_type ProviderCatalogMembershipUpserted;
+file_identifier "PCU3";

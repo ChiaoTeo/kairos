@@ -113,12 +113,38 @@ impl ReferenceApplication {
                 integrity: catalog_integrity,
             },
             sources,
-            coverage: ReferenceCoverageRuntimeStatus {
-                option_underlyings: self
-                    .option_underlyings()
-                    .into_iter()
-                    .filter_map(|value| InstrumentId::new(value).ok())
-                    .collect(),
+            coverage: {
+                let canonical_conflict_counts = model
+                    .source_health()
+                    .iter()
+                    .filter_map(|source| source.last_error.as_ref())
+                    .filter(|error| error.code == "reference.canonical_conflict")
+                    .fold(std::collections::BTreeMap::new(), |mut counts, error| {
+                        *counts
+                            .entry(
+                                error
+                                    .record_kind
+                                    .clone()
+                                    .unwrap_or_else(|| "unknown".into()),
+                            )
+                            .or_insert(0) += 1;
+                        counts
+                    });
+                ReferenceCoverageRuntimeStatus {
+                    option_underlyings: self
+                        .option_underlyings()
+                        .into_iter()
+                        .filter_map(|value| InstrumentId::new(value).ok())
+                        .collect(),
+                    coverage_count: model.coverage_count() as u64,
+                    usable_coverage_count: model.usable_coverage_count() as u64,
+                    stale_coverage_count: model.stale_coverage_count() as u64,
+                    unavailable_coverage_count: model.unavailable_coverage_count() as u64,
+                    unresolved_venue_mapping_count: model.unresolved_venue_mapping_count() as u64,
+                    v2_unprojectable_market_count: model.v2_unprojectable_market_count() as u64,
+                    canonical_conflict_count: canonical_conflict_counts.values().sum(),
+                    canonical_conflict_counts,
+                }
             },
             publication: ReferencePublicationRuntimeStatus {
                 pending_publication_count: outbox_depth as u64,
@@ -331,7 +357,7 @@ fn source_runtime_status(source: &crate::domain::SourceHealth) -> ReferenceSourc
         desired_state: desired_state.map(contract_source_desired_state),
         sync_policy: definition.map(|value| contract_source_sync_policy(value.sync_policy)),
         scope: definition.map(|value| contract_source_scope(value.scope.clone())),
-        credential_binding_present: definition.map(|value| value.credential_binding.is_some()),
+        connection_id_present: definition.map(|value| value.connection_id.is_some()),
         phase,
         progress,
         work_item: ReferenceSourceWorkItem {

@@ -42,6 +42,26 @@ Pure market rules are reused through domain types; same-package workflows are
 reused through application use cases; cross-business callers never import the
 main Market crate.
 
+## Standalone Massive connections
+
+Standalone Massive queries and historical downloads select an enabled Integration
+provider connection for the requested product and `market-query` purpose. They
+use that connection's credential, environment and endpoint, including private
+endpoints; a legacy `market.providers` entry is not required. Multiple matching
+connections are rejected rather than selected arbitrarily. `--credential-id`
+can narrow selection, and `--endpoint` overrides the endpoint for that invocation.
+
+## Quote venue evidence
+
+Quote observations preserve provider-native `bid_venue_code` and `ask_venue_code`
+alongside independently optional canonical `bid_venue_id` and `ask_venue_id`.
+Managed Massive ingress resolves both sides in one Reference read session;
+unknown mappings remain absent and reporting-only facilities cannot become
+execution-side identities. Neither the listing venue nor the trade venue is a
+fallback for an unknown quote side. The additive wire fields are defined in
+[`quote.fbs`](../../../schemas/v2/market/types/quote.fbs), with old-layout
+compatibility exercised by the contract's `v2_contract` tests.
+
 ## Verification
 
 ```text

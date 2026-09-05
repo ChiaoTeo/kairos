@@ -64,6 +64,17 @@ fn account_actor_has_no_io_dependencies() {
 }
 
 #[test]
+fn account_queries_reference_instead_of_caching_identity_snapshots() {
+    let integration = source("src/services/integration.rs");
+    assert!(!integration.contains("AccountReferenceSnapshot"));
+    assert!(!integration.contains("update_reference_snapshot"));
+    assert!(integration.contains("ReferenceCatalog"));
+    assert!(integration.contains(".read_session()"));
+    assert!(integration.contains(".resolve_participant_symbol("));
+    assert!(!integration.contains(".market_catalog("));
+}
+
+#[test]
 fn account_does_not_own_execution_planning_or_lifecycle() {
     let domain = source("src/domain/mod.rs");
     for forbidden in ["Planned", "Reserved", "Submitting", "OrderState"] {

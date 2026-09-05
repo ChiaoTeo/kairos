@@ -79,7 +79,7 @@ Reference 是当前最集中的误用点。
 | `contract/src/transport/projection.rs` | 一个 `Market` 别名和一个由 Execution 构造的水位 DTO | 删除文件；直接使用 `Market`；水位使用 `ReferenceWatermark` 或消费者私有状态 |
 | `ReferenceMarket = Market` | 无转换、无新约束的别名 | 删除 `ReferenceMarket`，统一使用 contract-owned `Market` |
 | `ReferenceHealth` | Execution 私有 Reference 依赖就绪信息；`status` 当前固定为 `ready` | 从 Reference contract 删除；在 Execution 用 `ReferenceDependencyState` 的存在性、时间和水位表达 |
-| `ReferenceProjectionSnapshot` | 一次事务读取并按消费者裁剪的 Reference 目录快照 | 拆为窄的 `MarketReferenceSnapshot`、`ExecutionReferenceSnapshot`、`AccountReferenceSnapshot`；若暂不拆型，先改 `ReferenceCatalogSnapshot` |
+| `ReferenceProjectionSnapshot` | 旧的消费者目录副本 | 已由 Decision 0046 删除；消费者使用 Reference contract 的 bounded typed current-table query，并在单次决策中固定 read-session watermark |
 | `market_projection()`、`execution_projection()`、`account_projection()` | 从完整目录筛选消费者所需记录 | 改为 `for_market()`、`for_execution()`、`for_account()`，或直接在各窄 snapshot 构造器中完成 |
 | SQLite `ReferenceProjection` | market 查询结果及其关联 instruments、水位 | `ReferenceMarketCatalogPage` 或 `MarketCatalogResult` |
 | `ReferenceSqliteReader::projection()` | 在一个 SQLite transaction 中读取 market 及关联 instrument | 公共语义改为 `market_catalog()`；SQLite 留在 `catalog/sqlite.rs` 的实现名中 |
@@ -294,7 +294,7 @@ reference.catalog().for_execution()?;
 
 ### 第一阶段：修正 Reference 公共边界
 
-1. 引入消费者窄 snapshot 或先引入 `ReferenceCatalogSnapshot`。
+1. 为消费者引入 bounded typed Reference query，并明确 coverage evidence 与 read-session watermark。
 2. 迁移 Rust 和 Python 调用方，不再导出 `ReferenceMarket`、`ReferenceHealth`。
 3. 将 SQLite 查询结果和入口改为 `Catalog` 语义。
 4. 删除 `contract/src/transport/projection.rs`。

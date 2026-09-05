@@ -18,8 +18,8 @@
 
 - Integration owns the OKX provider-native connection, option-underlying enumeration, instrument
   requests, payload validation, and normalized `ExternalInstrumentCatalog` facts.
-- Reference owns canonical exchanges, assets, instruments, listings, markets, lifecycle diffing,
-  persistence, snapshots, and event publication.
+- Reference owns canonical venues, assets, instruments, listings, markets, provider catalog
+  membership, coverage, lifecycle diffing, persistence, and event publication.
 - Spot, swap, futures, and options remain independent capabilities in Reference
   composition. An option refresh is complete only after every advertised underlying has returned
   successfully.

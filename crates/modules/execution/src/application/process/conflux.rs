@@ -957,7 +957,7 @@ impl ExecutionApplication {
             requested_total,
             original.filled_quantity,
         )
-        .map_err(ExecutionError::Invalid)?;
+        .map_err(ExecutionError::Order)?;
         let replacement = SubmitOrder {
             order_id: kairos_primitives::execution::OrderId::new(format!(
                 "{}:replacement",
@@ -1111,7 +1111,7 @@ impl ExecutionApplication {
                         if self.conflux.simulated_account_settlement.is_some() {
                             let (fill, order, commitment) = self
                                 .simulated_settlement_fact(fill_id)
-                                .map_err(ExecutionError::Persistence)?;
+                                .map_err(ExecutionError::Order)?;
                             self.conflux
                                 .simulated_account_settlement
                                 .as_mut()
